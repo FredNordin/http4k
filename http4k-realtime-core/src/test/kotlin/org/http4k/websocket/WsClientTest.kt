@@ -11,6 +11,9 @@ import org.http4k.testing.testWsClient
 import org.http4k.websocket.WsStatus.Companion.NEVER_CONNECTED
 import org.http4k.websocket.WsStatus.Companion.NORMAL
 import org.junit.jupiter.api.Test
+import java.time.Duration
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 class WsClientTest {
@@ -104,5 +107,48 @@ class WsClientTest {
 
         assertThat(client.received().none(), equalTo(true))
         assertThat(client.received().toList(), isEmpty) // verify NoSuchElement not thrown during iteration
+    }
+
+    @Test
+    fun `waits for messages when receive timeout set`() {
+        val executor = Executors.newSingleThreadScheduledExecutor()
+        try {
+            val client = { _: Request ->
+                { ws: Websocket ->
+                    executor.schedule({ ws.send(message) }, 10, TimeUnit.MILLISECONDS)
+                    executor.schedule({ ws.send(message) }, 20, TimeUnit.MILLISECONDS)
+                    executor.schedule({ ws.close(NEVER_CONNECTED) }, 30, TimeUnit.MILLISECONDS)
+                    Unit
+                }
+            }.testWsClient(Request(GET, "/"), receiveTimeout = Duration.ofMillis(50))
+
+            val received = client.received()
+            assertThat(received.take(2).toList(), equalTo(listOf(message, message)))
+        } finally {
+            executor.shutdown()
+        }
+    }
+
+    @Test
+    fun `no messages when receive timeout set`() {
+        val executor = Executors.newSingleThreadScheduledExecutor()
+        try {
+            val client = { _: Request ->
+                { ws: Websocket ->
+                    executor.schedule(
+                        {
+                            ws.close(NORMAL)
+                        },
+                        20, TimeUnit.MILLISECONDS
+                    )
+                    Unit
+                }
+            }.testWsClient(Request(GET, "/"), receiveTimeout = Duration.ofMillis(50))
+
+            assertThat(client.received().none(), equalTo(true))
+            assertThat(client.received().toList(), isEmpty) // verify NoSuchElement not thrown during iteration
+        } finally {
+            executor.shutdown()
+        }
     }
 }

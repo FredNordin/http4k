@@ -9,7 +9,9 @@ import org.http4k.websocket.WsHandler
 import org.http4k.websocket.WsMessage
 import org.http4k.websocket.WsStatus
 import org.http4k.websocket.WsStatus.Companion.NORMAL
-import java.util.ArrayDeque
+import java.time.Duration
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 data class ClosedWebsocket(val status: WsStatus = NORMAL) : RuntimeException()
 
@@ -17,13 +19,18 @@ data class ClosedWebsocket(val status: WsStatus = NORMAL) : RuntimeException()
  * A class that is used for *offline* testing of a routed Websocket, without starting up a Server. Calls
  * are routed synchronously to the receiving Websocket, and error are propagated to the caller.
  */
-class TestWsClient internal constructor(consumer: WsConsumer, request: Request) : WsClient {
+class TestWsClient internal constructor(consumer: WsConsumer, request: Request,
+                                        private val receiveTimeout: Duration? = null) : WsClient {
 
-    private val queue = ArrayDeque<() -> WsMessage>()
+    private val queue = LinkedBlockingQueue<() -> WsMessage>()
 
     override fun received() = generateSequence {
         try {
-            queue.remove()()
+            if (receiveTimeout != null) {
+                queue.poll(receiveTimeout.toMillis(), TimeUnit.MILLISECONDS)?.invoke()
+            } else {
+                queue.remove()()
+            }
         } catch (e: ClosedWebsocket) {
             if (e.status == NORMAL) null else throw e
         } catch (e: NoSuchElementException) {
@@ -58,5 +65,6 @@ class TestWsClient internal constructor(consumer: WsConsumer, request: Request) 
     override fun send(message: WsMessage) = socket.triggerMessage(message)
 }
 
-fun WsHandler.testWsClient(request: Request): TestWsClient = TestWsClient(invoke(request), request)
+fun WsHandler.testWsClient(request: Request, receiveTimeout: Duration? = null): TestWsClient =
+    TestWsClient(invoke(request), request, receiveTimeout)
 fun PolyHandler.testWsClient(request: Request): TestWsClient = ws?.testWsClient(request) ?: error("No WS handler set.")

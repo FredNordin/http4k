@@ -1,0 +1,12 @@
+[
+  {
+    "payload": null,
+    "type": "connection_ack"
+  },
+  {
+    "payload": {
+      "some": "value"
+    },
+    "type": "pong"
+  }
+]

@@ -1,0 +1,8 @@
+[
+  {
+    "payload": {
+      "some": "value"
+    },
+    "type": "connection_ack"
+  }
+]
