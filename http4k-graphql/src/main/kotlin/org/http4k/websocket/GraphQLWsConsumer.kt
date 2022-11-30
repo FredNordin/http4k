@@ -5,7 +5,6 @@ import graphql.GraphQLError
 import graphql.GraphqlErrorException
 import org.http4k.format.AutoMarshalling
 import org.http4k.format.Jackson
-import org.http4k.graphql.GraphQLRequest
 import org.http4k.lens.Invalid
 import org.http4k.lens.Lens
 import org.http4k.lens.LensFailure
@@ -31,16 +30,15 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-typealias GraphQLWsRequestExecutor = (GraphQLRequest) -> CompletionStage<ExecutionResult>
-
 class GraphQLWsConsumer(
-    private val requestExecutor: GraphQLWsRequestExecutor,
+    private val onSubscribe: (Subscribe) -> CompletionStage<ExecutionResult>,
     private val onConnectionInit: (ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val onPing: (Ping) -> Pong = { Pong(payload = null) },
     private val onPong: (Pong) -> Unit = {},
-    private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(10),
-    private val json: AutoMarshalling = Jackson
+    private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(10)
 ) : WsConsumer, AutoCloseable {
+
+    private val json: AutoMarshalling = Jackson
 
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
     private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
@@ -72,7 +70,7 @@ class GraphQLWsConsumer(
                             val id = graphQLMessage.id
                             val dataSubscriber = DataSubscriber(id, ws)
                             if (subscriptions.putIfAbsent(id, dataSubscriber) == null) {
-                                requestExecutor(graphQLMessage.payload).handle { result, exception: Throwable? ->
+                                onSubscribe(graphQLMessage).handle { result, exception: Throwable? ->
                                     if (exception != null) {
                                         ws.sendError(id, listOf(exception.toGraphQLError()))
                                     } else {

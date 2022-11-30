@@ -33,9 +33,9 @@ import org.http4k.testing.ClosedWebsocket
 import org.http4k.testing.JsonApprovalTest
 import org.http4k.testing.TestWsClient
 import org.http4k.testing.testWsClient
-import org.http4k.websocket.GraphQLWsConsumerTest.Companion.assertApproved
 import org.http4k.websocket.GraphQLWsMessage.ConnectionAck
 import org.http4k.websocket.GraphQLWsMessage.Pong
+import org.http4k.websocket.GraphQLWsMessage.Subscribe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
@@ -107,10 +107,10 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on subscribe one next message is sent per result and one complete is sent when done`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             completedFuture(FakeExecutionResult(data = listOf(1, 2, 3).asFlow().asPublisher()))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
@@ -120,11 +120,11 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on subscribe with existing id the socket is closed`() {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             val data = listOf(1).asFlow().onEach { delay(1000) }.asPublisher()
             completedFuture(FakeExecutionResult(data))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
             sendSubscribe("subscribe-1")
@@ -146,10 +146,10 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on subscribe with id of previously completed subscription is allowed`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             completedFuture(FakeExecutionResult(listOf(1).asFlow().asPublisher()))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
@@ -164,7 +164,7 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on subscribe an error message is sent when execution result has errors`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             completedFuture(FakeExecutionResult(errors = listOf(
                 newValidationError()
                     .validationErrorType(ValidationErrorType.FieldUndefined)
@@ -178,7 +178,7 @@ class GraphQLWsConsumerTest {
                     .build()
             )))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
@@ -188,7 +188,7 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on subscribe with id of previously errored subscription is allowed`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             completedFuture(FakeExecutionResult(errors = listOf(
                 newValidationError()
                     .validationErrorType(ValidationErrorType.FieldUndefined)
@@ -197,7 +197,7 @@ class GraphQLWsConsumerTest {
                     .build()
             )))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
@@ -212,10 +212,10 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on subscribe an error message is sent when request executor returns error`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             CompletableFuture<ExecutionResult>().apply { completeExceptionally(IllegalStateException("Boom!")) }
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
@@ -225,12 +225,12 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on subscribe an error message is sent and no more messages when subscription result contains error`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             val data = listOf({ 1 }, { throw IllegalStateException("Boom!") }, { 2 })
                 .asFlow().map { it() }.asPublisher()
             completedFuture(FakeExecutionResult(data = data))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
@@ -240,10 +240,10 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on subscribe for multiple subscriptions results in messages for all subscriptions`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             completedFuture(FakeExecutionResult(data = listOf(1, 2, 3).asFlow().asPublisher()))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
             sendSubscribe("subscribe-2")
@@ -256,11 +256,11 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on complete stops sending messages for active subscription`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             val data = listOf(1, 2, 3).asFlow().onEach { if (it > 1) delay(40) }.asPublisher()
             completedFuture(FakeExecutionResult(data))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
@@ -276,11 +276,11 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on complete does nothing when the id does not match any subscriptions`(approver: Approver) {
-        val requestExecutor: GraphQLWsRequestExecutor = {
+        val onSubscribe: OnSubscribe = {
             val data = listOf(1, 2, 3).asFlow().onEach { if (it > 1) delay(10) }.asPublisher()
             completedFuture(FakeExecutionResult(data))
         }
-        GraphQLWsConsumer(requestExecutor).withTestClient {
+        GraphQLWsConsumer(onSubscribe).withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
@@ -341,7 +341,7 @@ class GraphQLWsConsumerTest {
                 .body(json.asFormatString(json.array(messages)))
         )
 
-        private val emptyResult: GraphQLWsRequestExecutor = {
+        private val emptyResult: OnSubscribe = {
             completedFuture(FakeExecutionResult(data = emptyFlow<Int>().asPublisher()))
         }
 
@@ -357,6 +357,8 @@ class GraphQLWsConsumerTest {
         }
     }
 }
+
+typealias OnSubscribe = (Subscribe) -> CompletableFuture<ExecutionResult>
 
 private data class FakeExecutionResult(private val data: Any? = null,
                                        private val errors: List<GraphQLError> = emptyList()) : ExecutionResult {
