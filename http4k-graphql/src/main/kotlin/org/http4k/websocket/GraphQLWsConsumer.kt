@@ -1,6 +1,8 @@
 package org.http4k.websocket
 
 import graphql.ExecutionResult
+import graphql.GraphQLError
+import graphql.GraphqlErrorException
 import org.http4k.format.AutoMarshalling
 import org.http4k.format.Jackson
 import org.http4k.graphql.GraphQLRequest
@@ -70,20 +72,20 @@ class GraphQLWsConsumer(
                             val id = graphQLMessage.id
                             val dataSubscriber = DataSubscriber(id, ws)
                             if (subscriptions.putIfAbsent(id, dataSubscriber) == null) {
-                                requestExecutor(graphQLMessage.payload)
-                                    .thenAccept { result ->
+                                requestExecutor(graphQLMessage.payload).handle { result, exception: Throwable? ->
+                                    if (exception != null) {
+                                        ws.sendError(id, listOf(exception.toGraphQLError()))
+                                    } else {
                                         if (result.isDataPresent) {
                                             when (val data = result.getData<Any?>()) {
                                                 is Publisher<*> -> data.subscribe(dataSubscriber)
                                                 else -> TODO("handle null data or not publisher")
                                             }
                                         } else {
-                                            ws.send(Error(id, result.errors.map { it.toSpecification() }))
-                                            subscriptions.remove(id)
+                                            ws.sendError(id, result.errors)
                                         }
-                                    }.exceptionally { error ->
-                                        TODO("handle execution error")
                                     }
+                                }
                             } else {
                                 ws.close(subscriberAlreadyExistsStatus(id))
                             }
@@ -123,6 +125,16 @@ class GraphQLWsConsumer(
             close(internalServerErrorStatus)
         }
 
+    private fun Websocket.sendError(id: String, errors: List<GraphQLError>) {
+        subscriptions.remove(id)
+        send(Error(id, errors.map { it.toSpecification() }))
+    }
+
+    private fun Websocket.sendComplete(id: String) {
+        subscriptions.remove(id)
+        send(Complete(id))
+    }
+
     @Suppress("ReactiveStreamsSubscriberImplementation")
     private inner class DataSubscriber(private val subscriptionId: String, private val ws: Websocket) : Subscriber<Any>{
         private lateinit var subscription: Subscription
@@ -138,12 +150,12 @@ class GraphQLWsConsumer(
         }
 
         override fun onError(error: Throwable) {
-            TODO("Not yet implemented")
+            subscription.cancel()
+            ws.sendError(subscriptionId, listOf(error.toGraphQLError()))
         }
 
         override fun onComplete() {
-            ws.send(Complete(subscriptionId))
-            subscriptions.remove(subscriptionId)
+            ws.sendComplete(subscriptionId)
         }
     }
 
@@ -155,6 +167,16 @@ class GraphQLWsConsumer(
         private fun subscriberAlreadyExistsStatus(id: String) = WsStatus(4409, "Subscriber for '$id' already exists")
         private val multipleConnectionInitStatus = WsStatus(4429, "Too many initialisation requests")
         private val internalServerErrorStatus = WsStatus(4500, "Internal server error")
+
+        private fun Throwable.toGraphQLError(): GraphQLError =
+            if (this is GraphQLError) {
+                this
+            } else {
+                GraphqlErrorException.newErrorException()
+                    .cause(this)
+                    .message(this.localizedMessage)
+                    .build()
+            }
     }
 }
 

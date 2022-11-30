@@ -13,6 +13,7 @@ import graphql.validation.ValidationErrorType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.reactive.asPublisher
 import org.http4k.core.ContentType
@@ -34,7 +35,9 @@ import org.http4k.websocket.GraphQLWsMessage.Pong
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
+import java.lang.IllegalStateException
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletableFuture.completedFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -203,6 +206,34 @@ class GraphQLWsConsumerTest {
         }
     }
 
+    @Test
+    fun `on subscribe an error message is sent when request executor returns error`(approver: Approver) {
+        val requestExecutor: GraphQLWsRequestExecutor = {
+            CompletableFuture<ExecutionResult>().apply { completeExceptionally(IllegalStateException("Boom!")) }
+        }
+        GraphQLWsConsumer(requestExecutor).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            approver.assertApproved(receivedMessages().take(3).toList())
+        }
+    }
+
+    @Test
+    fun `on subscribe an error message is sent and no more messages when subscription result contains error`(approver: Approver) {
+        val requestExecutor: GraphQLWsRequestExecutor = {
+            val data = listOf({ 1 }, { throw IllegalStateException("Boom!") }, { 2 })
+                .asFlow().map { it() }.asPublisher()
+            completedFuture(FakeExecutionResult(data = data))
+        }
+        GraphQLWsConsumer(requestExecutor).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            approver.assertApproved(receivedMessages().take(4).toList())
+        }
+    }
+
     private fun GraphQLWsConsumer.withTestClient(block: TestWsClient.() -> Unit) {
         use {
             block(websockets(it).testWsClient(Request(Method.GET, ""), receiveTimeout = Duration.ofMillis(50)))
@@ -222,7 +253,8 @@ class GraphQLWsConsumerTest {
             send { obj("type" to string("subscribe"), "id" to string(id),
                 "payload" to obj("query" to string("test query"))) }
 
-        private fun TestWsClient.receivedMessages() = received().map { json.parse(it.bodyString()) }
+        private fun TestWsClient.receivedMessages() = received()
+            .map { json.parse(it.bodyString()) }
 
         private fun Approver.assertApproved(messages: List<JsonNode>) = assertApproved(
             Response(Status.OK)

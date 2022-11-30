@@ -1,0 +1,18 @@
+[
+  {
+    "payload": null,
+    "type": "connection_ack"
+  },
+  {
+    "id": "subscribe-1",
+    "payload": [
+      {
+        "message": "Boom!",
+        "extensions": {
+          "classification": "DataFetchingException"
+        }
+      }
+    ],
+    "type": "error"
+  }
+]
