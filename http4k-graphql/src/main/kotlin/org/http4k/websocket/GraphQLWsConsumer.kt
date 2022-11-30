@@ -154,6 +154,7 @@ class GraphQLWsConsumer(
 
         override fun onComplete() {
             ws.send(Complete(subscriptionId))
+            subscriptions.remove(subscriptionId)
         }
     }
 

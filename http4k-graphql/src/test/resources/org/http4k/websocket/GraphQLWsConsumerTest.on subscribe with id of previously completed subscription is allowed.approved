@@ -1,0 +1,11 @@
+[
+  {
+    "id": "subscribe-1",
+    "payload": 1,
+    "type": "next"
+  },
+  {
+    "id": "subscribe-1",
+    "type": "complete"
+  }
+]
