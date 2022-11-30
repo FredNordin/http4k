@@ -26,28 +26,31 @@ import org.http4k.testing.ClosedWebsocket
 import org.http4k.testing.JsonApprovalTest
 import org.http4k.testing.TestWsClient
 import org.http4k.testing.testWsClient
+import org.http4k.websocket.GraphQLWsMessage.ConnectionAck
+import org.http4k.websocket.GraphQLWsMessage.Pong
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
 import java.time.Duration
 import java.util.concurrent.CompletableFuture.completedFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Timeout(5, unit = TimeUnit.SECONDS)
 @ExtendWith(JsonApprovalTest::class)
 class GraphQLWsConsumerTest {
 
     @Test
-    fun `on connection_init a connection_ack message is sent with payload from onConnectionInit`(approver: Approver) =
-        GraphQLWsConsumer(emptyResult, onConnectionInit = { ValidationResult.valid(it) }).withTestClient {
+    fun `on connection_init a connection_ack message is sent with result from onConnectionInit`(approver: Approver) =
+        GraphQLWsConsumer(emptyResult, onConnectionInit = { ConnectionAck(it.payload) }).withTestClient {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
             approver.assertApproved(receivedMessages().toList())
         }
 
     @Test
-    fun `on connection_init the socket is closed when the validation fails`() =
-        GraphQLWsConsumer(emptyResult, onConnectionInit = { ValidationResult.invalid() }).withTestClient {
+    fun `on connection_init the socket is closed when onConnectionInit returns null`() =
+        GraphQLWsConsumer(emptyResult, onConnectionInit = { null }).withTestClient {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
             assertThat({ receivedMessages().toList() },
@@ -72,8 +75,8 @@ class GraphQLWsConsumerTest {
         }
 
     @Test
-    fun `on ping a pong message is sent with payload from onPing`(approver: Approver) =
-        GraphQLWsConsumer(emptyResult, onPing = { it }).withTestClient {
+    fun `on ping a pong message is sent with result from onPing`(approver: Approver) =
+        GraphQLWsConsumer(emptyResult, onPing = { Pong(it.payload) }).withTestClient {
             sendConnectionInit()
             send { obj("type" to string("ping"), "payload" to obj("some" to string("value"))) }
 
@@ -82,13 +85,13 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on pong no message is sent and onPong is invoked`(approver: Approver) {
-        val onPongPayload = mutableMapOf<String, Any>()
-        GraphQLWsConsumer(emptyResult, onPong = { onPongPayload.putAll(it ?: emptyMap()) }).withTestClient {
+        val onPongInvoked = AtomicBoolean(false)
+        GraphQLWsConsumer(emptyResult, onPong = { onPongInvoked.set(it.payload?.get("some") != null) }).withTestClient {
             sendConnectionInit()
             send { obj("type" to string("pong"), "payload" to obj("some" to string("value"))) }
 
             approver.assertApproved(receivedMessages().toList())
-            assertThat(onPongPayload, equalTo(mapOf("some" to "value")))
+            assertThat(onPongInvoked.get(), equalTo(true))
         }
     }
 
