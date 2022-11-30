@@ -234,6 +234,46 @@ class GraphQLWsConsumerTest {
         }
     }
 
+    @Test
+    fun `on complete stops sending messages for active subscription`(approver: Approver) {
+        val requestExecutor: GraphQLWsRequestExecutor = {
+            val data = listOf(1, 2, 3).asFlow().onEach { if (it > 1) delay(40) }.asPublisher()
+            completedFuture(FakeExecutionResult(data))
+        }
+        GraphQLWsConsumer(requestExecutor).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            val messages = receivedMessages().onEach {
+                if (it.path("type").asText() == "next") {
+                    sendComplete("subscribe-1")
+                }
+            }.take(3).toList()
+
+            approver.assertApproved(messages)
+        }
+    }
+
+    @Test
+    fun `on complete does nothing when the id does not match any subscriptions`(approver: Approver) {
+        val requestExecutor: GraphQLWsRequestExecutor = {
+            val data = listOf(1, 2, 3).asFlow().onEach { if (it > 1) delay(10) }.asPublisher()
+            completedFuture(FakeExecutionResult(data))
+        }
+        GraphQLWsConsumer(requestExecutor).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            val messages = receivedMessages().onEach {
+                if (it.path("type").asText() == "next") {
+                    sendComplete("subscribe-2")
+                }
+            }.take(5).toList()
+
+            approver.assertApproved(messages)
+        }
+    }
+
     private fun GraphQLWsConsumer.withTestClient(block: TestWsClient.() -> Unit) {
         use {
             block(websockets(it).testWsClient(Request(Method.GET, ""), receiveTimeout = Duration.ofMillis(50)))
@@ -252,6 +292,9 @@ class GraphQLWsConsumerTest {
         private fun TestWsClient.sendSubscribe(id: String) =
             send { obj("type" to string("subscribe"), "id" to string(id),
                 "payload" to obj("query" to string("test query"))) }
+
+        private fun TestWsClient.sendComplete(id: String) =
+            send { obj("type" to string("complete"), "id" to string(id)) }
 
         private fun TestWsClient.receivedMessages() = received()
             .map { json.parse(it.bodyString()) }

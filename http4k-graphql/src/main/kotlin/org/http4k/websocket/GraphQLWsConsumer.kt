@@ -94,6 +94,10 @@ class GraphQLWsConsumer(
                         }
                     }
 
+                    is Complete -> {
+                        subscriptions.remove(graphQLMessage.id)?.cancel()
+                    }
+
                     else -> {} // Ignore other messages
                 }
             } catch (e: LensFailure) {
