@@ -78,7 +78,8 @@ class GraphQLWsConsumer(
                                                 else -> TODO("handle null data or not publisher")
                                             }
                                         } else {
-                                            TODO("handle result error")
+                                            ws.send(Error(id, result.errors.map { it.toSpecification() }))
+                                            subscriptions.remove(id)
                                         }
                                     }.exceptionally { error ->
                                         TODO("handle execution error")

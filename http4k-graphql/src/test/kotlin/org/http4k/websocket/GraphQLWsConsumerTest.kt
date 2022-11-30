@@ -7,6 +7,9 @@ import com.natpryce.hamkrest.present
 import com.natpryce.hamkrest.throws
 import graphql.ExecutionResult
 import graphql.GraphQLError
+import graphql.language.SourceLocation
+import graphql.validation.ValidationError.newValidationError
+import graphql.validation.ValidationErrorType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -45,7 +48,7 @@ class GraphQLWsConsumerTest {
         GraphQLWsConsumer(emptyResult, onConnectionInit = { ConnectionAck(it.payload) }).withTestClient {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
-            approver.assertApproved(receivedMessages().toList())
+            approver.assertApproved(receivedMessages().take(1).toList())
         }
 
     @Test
@@ -53,14 +56,14 @@ class GraphQLWsConsumerTest {
         GraphQLWsConsumer(emptyResult, onConnectionInit = { null }).withTestClient {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
-            assertThat({ receivedMessages().toList() },
+            assertThat({ receivedMessages().take(1).toList() },
                 throws(equalTo(ClosedWebsocket(WsStatus(4403, "Forbidden")))))
         }
 
     @Test
     fun `when connection_init is not sent withing timeout the socket is closed`() =
         GraphQLWsConsumer(emptyResult, connectionInitWaitTimeout = Duration.ofMillis(1)).withTestClient {
-            assertThat({ receivedMessages().toList() },
+            assertThat({ receivedMessages().take(1).toList() },
                 throws(equalTo(ClosedWebsocket(WsStatus(4408, "Connection initialisation timeout")))))
         }
 
@@ -70,7 +73,7 @@ class GraphQLWsConsumerTest {
             sendConnectionInit()
             sendConnectionInit()
 
-            assertThat({ receivedMessages().toList() },
+            assertThat({ receivedMessages().take(2).toList() },
                 throws(equalTo(ClosedWebsocket(WsStatus(4429, "Too many initialisation requests")))))
         }
 
@@ -80,7 +83,7 @@ class GraphQLWsConsumerTest {
             sendConnectionInit()
             send { obj("type" to string("ping"), "payload" to obj("some" to string("value"))) }
 
-            approver.assertApproved(receivedMessages().toList())
+            approver.assertApproved(receivedMessages().take(2).toList())
         }
 
     @Test
@@ -90,7 +93,7 @@ class GraphQLWsConsumerTest {
             sendConnectionInit()
             send { obj("type" to string("pong"), "payload" to obj("some" to string("value"))) }
 
-            approver.assertApproved(receivedMessages().toList())
+            approver.assertApproved(receivedMessages().take(2).toList())
             assertThat(onPongInvoked.get(), equalTo(true))
         }
     }
@@ -104,7 +107,7 @@ class GraphQLWsConsumerTest {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
-            approver.assertApproved(receivedMessages().toList())
+            approver.assertApproved(receivedMessages().take(5).toList())
         }
     }
 
@@ -119,7 +122,7 @@ class GraphQLWsConsumerTest {
             sendSubscribe("subscribe-1")
             sendSubscribe("subscribe-1")
 
-            assertThat({ receivedMessages().toList() },
+            assertThat({ receivedMessages().take(4).toList() },
                 throws(equalTo(ClosedWebsocket(WsStatus(4409, "Subscriber for 'subscriber-1' already exists")))))
         }
     }
@@ -129,7 +132,7 @@ class GraphQLWsConsumerTest {
         GraphQLWsConsumer(emptyResult).withTestClient {
             sendSubscribe("subscribe-1")
 
-            assertThat({ receivedMessages().toList() },
+            assertThat({ receivedMessages().take(1).toList() },
                 throws(equalTo(ClosedWebsocket(WsStatus(4401, "Unauthorized")))))
         }
     }
@@ -143,18 +146,66 @@ class GraphQLWsConsumerTest {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
-            val completedMessage = receivedMessages().find { it.path("type").asText() == "complete" }
-            assertThat(completedMessage, present())
+            val completeMessage = receivedMessages().take(3).find { it.path("type").asText() == "complete" }
+            assertThat(completeMessage, present())
 
             sendSubscribe("subscribe-1")
 
-            approver.assertApproved(receivedMessages().toList())
+            approver.assertApproved(receivedMessages().take(2).toList())
+        }
+    }
+
+    @Test
+    fun `on subscribe an error message is sent when execution result has errors`(approver: Approver) {
+        val requestExecutor: GraphQLWsRequestExecutor = {
+            completedFuture(FakeExecutionResult(errors = listOf(
+                newValidationError()
+                    .validationErrorType(ValidationErrorType.FieldUndefined)
+                    .description("someField")
+                    .sourceLocation(SourceLocation(12, 34))
+                    .build(),
+                newValidationError()
+                    .validationErrorType(ValidationErrorType.FieldUndefined)
+                    .description("anotherField")
+                    .sourceLocation(SourceLocation(56, 78))
+                    .build()
+            )))
+        }
+        GraphQLWsConsumer(requestExecutor).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            approver.assertApproved(receivedMessages().take(3).toList())
+        }
+    }
+
+    @Test
+    fun `on subscribe with id of previously errored subscription is allowed`(approver: Approver) {
+        val requestExecutor: GraphQLWsRequestExecutor = {
+            completedFuture(FakeExecutionResult(errors = listOf(
+                newValidationError()
+                    .validationErrorType(ValidationErrorType.FieldUndefined)
+                    .description("someField")
+                    .sourceLocation(SourceLocation(12, 34))
+                    .build()
+            )))
+        }
+        GraphQLWsConsumer(requestExecutor).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            val errorMessage = receivedMessages().take(2).find { it.path("type").asText() == "error" }
+            assertThat(errorMessage, present())
+
+            sendSubscribe("subscribe-1")
+
+            approver.assertApproved(receivedMessages().take(1).toList())
         }
     }
 
     private fun GraphQLWsConsumer.withTestClient(block: TestWsClient.() -> Unit) {
         use {
-            block(websockets(it).testWsClient(Request(Method.GET, ""), receiveTimeout = Duration.ofMillis(100)))
+            block(websockets(it).testWsClient(Request(Method.GET, ""), receiveTimeout = Duration.ofMillis(50)))
         }
     }
 
@@ -190,7 +241,7 @@ private data class FakeExecutionResult(private val data: Any? = null,
     override fun getErrors(): List<GraphQLError> = errors
     @Suppress("UNCHECKED_CAST")
     override fun <T : Any?> getData(): T? = data as? T
-    override fun isDataPresent(): Boolean = true
+    override fun isDataPresent(): Boolean = errors.isEmpty()
     override fun getExtensions(): Map<Any, Any> = emptyMap()
     override fun toSpecification(): Map<String, Any> = emptyMap()
 }

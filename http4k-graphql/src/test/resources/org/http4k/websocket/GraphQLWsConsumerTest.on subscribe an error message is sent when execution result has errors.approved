@@ -1,0 +1,36 @@
+[
+  {
+    "payload": null,
+    "type": "connection_ack"
+  },
+  {
+    "id": "subscribe-1",
+    "payload": [
+      {
+        "message": "someField",
+        "locations": [
+          {
+            "line": 12,
+            "column": 34
+          }
+        ],
+        "extensions": {
+          "classification": "ValidationError"
+        }
+      },
+      {
+        "message": "anotherField",
+        "locations": [
+          {
+            "line": 56,
+            "column": 78
+          }
+        ],
+        "extensions": {
+          "classification": "ValidationError"
+        }
+      }
+    ],
+    "type": "error"
+  }
+]
