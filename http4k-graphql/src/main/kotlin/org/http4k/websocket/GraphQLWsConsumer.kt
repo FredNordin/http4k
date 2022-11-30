@@ -98,7 +98,9 @@ class GraphQLWsConsumer(
                         subscriptions.remove(graphQLMessage.id)?.cancel()
                     }
 
-                    else -> {} // Ignore other messages
+                    is ConnectionAck -> ignored
+                    is Next -> ignored
+                    is Error -> ignored
                 }
             } catch (e: LensFailure) {
                 ws.close(badRequestStatus(e))
@@ -192,6 +194,8 @@ class GraphQLWsConsumer(
                     .message(this.localizedMessage)
                     .build()
             }
+
+        private val ignored: () -> Unit = {}
     }
 }
 

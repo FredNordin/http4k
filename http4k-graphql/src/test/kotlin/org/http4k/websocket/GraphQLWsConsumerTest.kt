@@ -33,6 +33,7 @@ import org.http4k.testing.ClosedWebsocket
 import org.http4k.testing.JsonApprovalTest
 import org.http4k.testing.TestWsClient
 import org.http4k.testing.testWsClient
+import org.http4k.websocket.GraphQLWsConsumerTest.Companion.assertApproved
 import org.http4k.websocket.GraphQLWsMessage.ConnectionAck
 import org.http4k.websocket.GraphQLWsMessage.Pong
 import org.junit.jupiter.api.Test
@@ -300,6 +301,18 @@ class GraphQLWsConsumerTest {
 
             assertThat({ receivedMessages().take(1).toList() },
                 throws(closedWebsocketWithStatus(4400, "graphql-ws message field 'type' must be string")))
+        }
+    }
+
+    @Test
+    fun `on connection_ack or next or error the messages are ignored`(approver: Approver) {
+        GraphQLWsConsumer(emptyResult).withTestClient {
+            sendConnectionInit()
+            send { obj("type" to string("connection_ack")) }
+            send { obj("type" to string("next"), "id" to string("anId")) }
+            send { obj("type" to string("error"), "id" to string("anId"), "payload" to array(emptyList())) }
+
+            approver.assertApproved(receivedMessages().take(2).toList())
         }
     }
 
