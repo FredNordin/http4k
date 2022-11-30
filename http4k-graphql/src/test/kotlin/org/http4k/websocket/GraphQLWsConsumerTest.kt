@@ -1,8 +1,11 @@
 package org.http4k.websocket
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.natpryce.hamkrest.Matcher
+import com.natpryce.hamkrest.and
 import com.natpryce.hamkrest.assertion.assertThat
 import com.natpryce.hamkrest.equalTo
+import com.natpryce.hamkrest.has
 import com.natpryce.hamkrest.present
 import com.natpryce.hamkrest.throws
 import graphql.ExecutionResult
@@ -60,14 +63,14 @@ class GraphQLWsConsumerTest {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
             assertThat({ receivedMessages().take(1).toList() },
-                throws(equalTo(ClosedWebsocket(WsStatus(4403, "Forbidden")))))
+                throws(closedWebsocketWithStatus(4403, "Forbidden")))
         }
 
     @Test
     fun `when connection_init is not sent withing timeout the socket is closed`() =
         GraphQLWsConsumer(emptyResult, connectionInitWaitTimeout = Duration.ofMillis(1)).withTestClient {
             assertThat({ receivedMessages().take(1).toList() },
-                throws(equalTo(ClosedWebsocket(WsStatus(4408, "Connection initialisation timeout")))))
+                throws(closedWebsocketWithStatus(4408, "Connection initialisation timeout")))
         }
 
     @Test
@@ -77,7 +80,7 @@ class GraphQLWsConsumerTest {
             sendConnectionInit()
 
             assertThat({ receivedMessages().take(2).toList() },
-                throws(equalTo(ClosedWebsocket(WsStatus(4429, "Too many initialisation requests")))))
+                throws(closedWebsocketWithStatus(4429, "Too many initialisation requests")))
         }
 
     @Test
@@ -126,7 +129,7 @@ class GraphQLWsConsumerTest {
             sendSubscribe("subscribe-1")
 
             assertThat({ receivedMessages().take(4).toList() },
-                throws(equalTo(ClosedWebsocket(WsStatus(4409, "Subscriber for 'subscriber-1' already exists")))))
+                throws(closedWebsocketWithStatus(4409, "Subscriber for 'subscribe-1' already exists")))
         }
     }
 
@@ -136,7 +139,7 @@ class GraphQLWsConsumerTest {
             sendSubscribe("subscribe-1")
 
             assertThat({ receivedMessages().take(1).toList() },
-                throws(equalTo(ClosedWebsocket(WsStatus(4401, "Unauthorized")))))
+                throws(closedWebsocketWithStatus(4401, "Unauthorized")))
         }
     }
 
@@ -235,6 +238,22 @@ class GraphQLWsConsumerTest {
     }
 
     @Test
+    fun `on subscribe for multiple subscriptions results in messages for all subscriptions`(approver: Approver) {
+        val requestExecutor: GraphQLWsRequestExecutor = {
+            completedFuture(FakeExecutionResult(data = listOf(1, 2, 3).asFlow().asPublisher()))
+        }
+        GraphQLWsConsumer(requestExecutor).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+            sendSubscribe("subscribe-2")
+
+            val messagesById = receivedMessages().sortedBy { it.path("id").asText() }.take(10).toList()
+
+            approver.assertApproved(messagesById)
+        }
+    }
+
+    @Test
     fun `on complete stops sending messages for active subscription`(approver: Approver) {
         val requestExecutor: GraphQLWsRequestExecutor = {
             val data = listOf(1, 2, 3).asFlow().onEach { if (it > 1) delay(40) }.asPublisher()
@@ -274,9 +293,13 @@ class GraphQLWsConsumerTest {
         }
     }
 
-    private fun GraphQLWsConsumer.withTestClient(block: TestWsClient.() -> Unit) {
-        use {
-            block(websockets(it).testWsClient(Request(Method.GET, ""), receiveTimeout = Duration.ofMillis(50)))
+    @Test
+    fun `on invalid message type the socket is closed`() {
+        GraphQLWsConsumer(emptyResult).withTestClient {
+            send { obj("type" to string("unknown")) }
+
+            assertThat({ receivedMessages().take(1).toList() },
+                throws(closedWebsocketWithStatus(4400, "graphql-ws message field 'type' must be string")))
         }
     }
 
@@ -307,6 +330,17 @@ class GraphQLWsConsumerTest {
 
         private val emptyResult: GraphQLWsRequestExecutor = {
             completedFuture(FakeExecutionResult(data = emptyFlow<Int>().asPublisher()))
+        }
+
+        private fun closedWebsocketWithStatus(code: Int, description: String): Matcher<ClosedWebsocket> = has(
+            ClosedWebsocket::status,
+            has(WsStatus::code, equalTo(code)) and has(WsStatus::description, equalTo(description))
+        )
+
+        private fun GraphQLWsConsumer.withTestClient(block: TestWsClient.() -> Unit) {
+            use {
+                block(websockets(it).testWsClient(Request(Method.GET, ""), receiveTimeout = Duration.ofMillis(50)))
+            }
         }
     }
 }
