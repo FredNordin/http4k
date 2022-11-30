@@ -8,8 +8,6 @@ import graphql.ExecutionResult
 import graphql.GraphQLError
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.flow.delayEach
-import kotlinx.coroutines.flow.delayFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.reactive.asPublisher
@@ -20,7 +18,6 @@ import org.http4k.core.Response
 import org.http4k.core.Status
 import org.http4k.core.with
 import org.http4k.format.Jackson
-import org.http4k.graphql.GraphQLRequest
 import org.http4k.lens.Header
 import org.http4k.routing.websockets
 import org.http4k.testing.Approver
@@ -32,7 +29,6 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
 import java.time.Duration
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletableFuture.completedFuture
 import java.util.concurrent.TimeUnit
 
@@ -124,7 +120,15 @@ class GraphQLWsConsumerTest {
         }
     }
 
-    // TEST on subscribe without connection_init then socket is closed
+    @Test
+    fun `on subscribe without connection_init the socket is closed`() {
+        GraphQLWsConsumer(emptyResult).withTestClient {
+            sendSubscribe("subscribe-1")
+
+            assertThat({ receivedMessages() },
+                throws(equalTo(ClosedWebsocket(WsStatus(4401, "Unauthorized")))))
+        }
+    }
 
     private fun GraphQLWsConsumer.withTestClient(block: TestWsClient.() -> Unit) {
         use {

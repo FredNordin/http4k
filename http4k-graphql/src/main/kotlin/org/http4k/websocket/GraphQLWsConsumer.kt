@@ -78,24 +78,28 @@ class GraphQLWsConsumer(
                     is Pong -> onPong(graphQLMessage.payload)
 
                     is Subscribe -> {
-                        val id = graphQLMessage.id
-                        val dataSubscriber = DataSubscriber(id, ws)
-                        if (subscriptions.putIfAbsent(id, dataSubscriber) == null) {
-                            requestExecutor(graphQLMessage.payload)
-                                .thenAccept { result ->
-                                    if (result.isDataPresent) {
-                                        when (val data = result.getData<Any?>()) {
-                                            is Publisher<*> -> data.subscribe(dataSubscriber)
-                                            else -> TODO("handle null data or not publisher")
+                        if (connectionInitReceived.get()) {
+                            val id = graphQLMessage.id
+                            val dataSubscriber = DataSubscriber(id, ws)
+                            if (subscriptions.putIfAbsent(id, dataSubscriber) == null) {
+                                requestExecutor(graphQLMessage.payload)
+                                    .thenAccept { result ->
+                                        if (result.isDataPresent) {
+                                            when (val data = result.getData<Any?>()) {
+                                                is Publisher<*> -> data.subscribe(dataSubscriber)
+                                                else -> TODO("handle null data or not publisher")
+                                            }
+                                        } else {
+                                            TODO("handle result error")
                                         }
-                                    } else {
-                                        TODO("handle result error")
+                                    }.exceptionally { error ->
+                                        TODO("handle execution error")
                                     }
-                                }.exceptionally { error ->
-                                    TODO("handle execution error")
-                                }
+                            } else {
+                                ws.close(WsStatus(4409, "Subscriber for '$id' already exists"))
+                            }
                         } else {
-                            ws.close(WsStatus(4409, "Subscriber for '$id' already exists"))
+                            ws.close(unauthorizedStatus)
                         }
                     }
 
@@ -130,6 +134,7 @@ class GraphQLWsConsumer(
             close(internalServerErrorStatus)
         }
 
+    @Suppress("ReactiveStreamsSubscriberImplementation")
     private inner class DataSubscriber(private val subscriptionId: String, private val ws: Websocket) : Subscriber<Any>{
         private lateinit var subscription: Subscription
 
@@ -153,10 +158,11 @@ class GraphQLWsConsumer(
     }
 
     companion object {
+        private val unauthorizedStatus = WsStatus(4401, "Unauthorized")
+        private val forbiddenStatus = WsStatus(4403, "Forbidden")
         private val connectionInitTimeoutStatus = WsStatus(4408, "Connection initialisation timeout")
         private val multipleConnectionInitStatus = WsStatus(4429, "Too many initialisation requests")
         private val internalServerErrorStatus = WsStatus(4500, "Internal server error")
-        private val forbiddenStatus = WsStatus(4403, "Forbidden")
     }
 }
 
