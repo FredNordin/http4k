@@ -112,18 +112,16 @@ class GraphQLWsConsumer(
 
     override fun close() {
         executor.shutdown()
+        subscriptions.forEach { ( _, subscriber) ->
+            subscriber.cancel()
+        }
     }
 
     private fun Websocket.scheduleConnectionInitTimeoutCheck() =
         executor.schedule({ close(connectionInitTimeoutStatus) },
             connectionInitWaitTimeout.toMillis(), TimeUnit.MILLISECONDS)
 
-    private fun Websocket.send(message: GraphQLWsMessage): Unit =
-        try {
-            send(WsMessage(json.asFormatString(message)))
-        } catch (e: Exception) {
-            close(internalServerErrorStatus)
-        }
+    private fun Websocket.send(message: GraphQLWsMessage): Unit = send(WsMessage(json.asFormatString(message)))
 
     private fun Websocket.sendError(id: String, errors: List<GraphQLError>) {
         subscriptions.remove(id)
@@ -137,25 +135,38 @@ class GraphQLWsConsumer(
 
     @Suppress("ReactiveStreamsSubscriberImplementation")
     private inner class DataSubscriber(private val subscriptionId: String, private val ws: Websocket) : Subscriber<Any>{
-        private lateinit var subscription: Subscription
+        private var subscription: Subscription? = null
 
         override fun onSubscribe(sub: Subscription) {
             subscription = sub
-            subscription.request(1)
+            subscription?.request(1)
         }
 
-        override fun onNext(next: Any) {
+        override fun onNext(next: Any) = doSafely {
             ws.send(Next(subscriptionId, next))
-            subscription.request(1)
+            subscription?.request(1)
         }
 
         override fun onError(error: Throwable) {
-            subscription.cancel()
+            subscription?.cancel()
             ws.sendError(subscriptionId, listOf(error.toGraphQLError()))
         }
 
-        override fun onComplete() {
+        override fun onComplete() = doSafely {
             ws.sendComplete(subscriptionId)
+        }
+
+        fun cancel() {
+            subscription?.cancel()
+        }
+
+        private fun doSafely(block: () -> Unit) {
+            try {
+                block()
+            } catch (e: Throwable) {
+                subscription?.cancel()
+                throw e
+            }
         }
     }
 
