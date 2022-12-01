@@ -370,7 +370,7 @@ class GraphQLWsConsumerTest {
     }
 }
 
-typealias OnSubscribe = (Subscribe) -> CompletableFuture<ExecutionResult>
+typealias OnSubscribe = Request.(Subscribe) -> CompletableFuture<ExecutionResult>
 
 private data class FakeExecutionResult(private val data: Any? = null,
                                        private val errors: List<GraphQLError> = emptyList()) : ExecutionResult {

@@ -3,6 +3,7 @@ package org.http4k.websocket
 import graphql.ExecutionResult
 import graphql.GraphQLError
 import graphql.GraphqlErrorException
+import org.http4k.core.Request
 import org.http4k.format.AutoMarshalling
 import org.http4k.format.Jackson
 import org.http4k.lens.Invalid
@@ -31,11 +32,11 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class GraphQLWsConsumer(
-    private val onSubscribe: (Subscribe) -> CompletionStage<ExecutionResult>,
-    private val onConnect: (ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
-    private val onPing: (Ping) -> Pong = { Pong(payload = null) },
-    private val onPong: (Pong) -> Unit = {},
-    private val onClose: (WsStatus) -> Unit = {},
+    private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>,
+    private val onConnect: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
+    private val onPing: Request.(Ping) -> Pong = { Pong(payload = null) },
+    private val onPong: Request.(Pong) -> Unit = {},
+    private val onClose: Request.(WsStatus) -> Unit = {},
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3)
 ) : WsConsumer, AutoCloseable {
 
@@ -69,14 +70,14 @@ class GraphQLWsConsumer(
             }
             subscriptions.clear()
             ws.close(status)
-            onCloseTasks.forEach { it(status) }
+            onCloseTasks.forEach { it(ws.upgradeRequest, status) }
         }
 
         val connectionInitTimeoutCheck = executor.schedule(
             { close(connectionInitTimeoutStatus) },
             connectionInitWaitTimeout.toMillis(), TimeUnit.MILLISECONDS
         )
-        onCloseTasks += {
+        onCloseTasks.add(0) {
             if (!connectionInitTimeoutCheck.isDone) {
                 connectionInitTimeoutCheck.cancel(false)
             }
@@ -88,23 +89,23 @@ class GraphQLWsConsumer(
                     is ConnectionInit -> {
                         if (connectionInitReceived.compareAndSet(false, true)) {
                             connectionInitTimeoutCheck.cancel(false)
-                            onConnect(graphQLMessage)?.let { ws.send(it) }
+                            onConnect(ws.upgradeRequest, graphQLMessage)?.let { ws.send(it) }
                                 ?: close(forbiddenStatus)
                         } else {
                             close(multipleConnectionInitStatus)
                         }
                     }
 
-                    is Ping -> ws.send(onPing(graphQLMessage))
+                    is Ping -> ws.send(onPing(ws.upgradeRequest, graphQLMessage))
 
-                    is Pong -> onPong(graphQLMessage)
+                    is Pong -> onPong(ws.upgradeRequest, graphQLMessage)
 
                     is Subscribe -> {
                         if (connectionInitReceived.get()) {
                             val id = graphQLMessage.id
                             val dataSubscriber = GraphQLWsDataSubscriber(id, ::sendNext, ::sendComplete, ::sendError)
                             if (subscriptions.putIfAbsent(id, dataSubscriber) == null) {
-                                onSubscribe(graphQLMessage).handle { result, exception: Throwable? ->
+                                onSubscribe(ws.upgradeRequest, graphQLMessage).handle { result, exception: Throwable? ->
                                     if (exception != null) {
                                         sendError(id, listOf(exception.toGraphQLError()))
                                     } else {
