@@ -6,15 +6,17 @@ import graphql.GraphqlErrorException
 import org.http4k.core.Request
 import org.http4k.format.AutoMarshalling
 import org.http4k.format.Jackson
+import org.http4k.graphql.ws.GraphQLWsMessage
+import org.http4k.lens.GraphQLWsMessageLens
 import org.http4k.lens.LensFailure
-import org.http4k.websocket.GraphQLWsMessage.Complete
-import org.http4k.websocket.GraphQLWsMessage.ConnectionAck
-import org.http4k.websocket.GraphQLWsMessage.ConnectionInit
-import org.http4k.websocket.GraphQLWsMessage.Error
-import org.http4k.websocket.GraphQLWsMessage.Next
-import org.http4k.websocket.GraphQLWsMessage.Ping
-import org.http4k.websocket.GraphQLWsMessage.Pong
-import org.http4k.websocket.GraphQLWsMessage.Subscribe
+import org.http4k.graphql.ws.GraphQLWsMessage.Complete
+import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
+import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionInit
+import org.http4k.graphql.ws.GraphQLWsMessage.Error
+import org.http4k.graphql.ws.GraphQLWsMessage.Next
+import org.http4k.graphql.ws.GraphQLWsMessage.Ping
+import org.http4k.graphql.ws.GraphQLWsMessage.Pong
+import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
@@ -26,7 +28,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-class GraphQLWsConsumer(
+class GraphQLWsServer(
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3),
     private val onConnect: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val onPing: Request.(Ping) -> Pong = { Pong(payload = null) },

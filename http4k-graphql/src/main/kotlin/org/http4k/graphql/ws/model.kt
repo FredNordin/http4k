@@ -1,4 +1,4 @@
-package org.http4k.websocket
+package org.http4k.graphql.ws
 
 import org.http4k.graphql.GraphQLRequest
 

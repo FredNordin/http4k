@@ -1,4 +1,4 @@
-package org.http4k.websocket
+package org.http4k.lens
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.natpryce.hamkrest.assertion.assertThat
@@ -7,20 +7,16 @@ import com.natpryce.hamkrest.has
 import com.natpryce.hamkrest.throws
 import org.http4k.format.Jackson
 import org.http4k.graphql.GraphQLRequest
-import org.http4k.lens.Invalid
-import org.http4k.lens.LensFailure
-import org.http4k.lens.Meta
-import org.http4k.lens.Missing
-import org.http4k.lens.ParamMeta.ObjectParam
-import org.http4k.lens.ParamMeta.StringParam
-import org.http4k.websocket.GraphQLWsMessage.Complete
-import org.http4k.websocket.GraphQLWsMessage.ConnectionAck
-import org.http4k.websocket.GraphQLWsMessage.ConnectionInit
-import org.http4k.websocket.GraphQLWsMessage.Error
-import org.http4k.websocket.GraphQLWsMessage.Next
-import org.http4k.websocket.GraphQLWsMessage.Ping
-import org.http4k.websocket.GraphQLWsMessage.Pong
-import org.http4k.websocket.GraphQLWsMessage.Subscribe
+import org.http4k.graphql.ws.GraphQLWsMessage
+import org.http4k.graphql.ws.GraphQLWsMessage.Complete
+import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
+import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionInit
+import org.http4k.graphql.ws.GraphQLWsMessage.Error
+import org.http4k.graphql.ws.GraphQLWsMessage.Next
+import org.http4k.graphql.ws.GraphQLWsMessage.Ping
+import org.http4k.graphql.ws.GraphQLWsMessage.Pong
+import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
+import org.http4k.websocket.WsMessage
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.params.ParameterizedTest
@@ -41,11 +37,12 @@ class GraphQLWsMessageLensTest {
     fun `fails when type is unknown`() {
         val wsMessage = wsMessage { obj("type" to string("garbage")) }
 
-        assertThat({ lens(wsMessage) },
+        assertThat(
+            { lens(wsMessage) },
             throws(
                 has(
                     LensFailure::failures,
-                    equalTo(listOf(Invalid(Meta(true, "graphql-ws message field", StringParam, "type"))))
+                    equalTo(listOf(Invalid(Meta(true, "graphql-ws message field", ParamMeta.StringParam, "type"))))
                 )
             )
         )
@@ -55,11 +52,12 @@ class GraphQLWsMessageLensTest {
     fun `fails when type is missing`() {
         val wsMessage = wsMessage { obj("not-type" to string("garbage")) }
 
-        assertThat({ lens(wsMessage) },
+        assertThat(
+            { lens(wsMessage) },
             throws(
                 has(
                     LensFailure::failures,
-                    equalTo(listOf(Missing(Meta(true, "graphql-ws message field", StringParam, "type"))))
+                    equalTo(listOf(Missing(Meta(true, "graphql-ws message field", ParamMeta.StringParam, "type"))))
                 )
             )
         )
@@ -67,11 +65,12 @@ class GraphQLWsMessageLensTest {
 
     @Test
     fun `fails when body is not json`() {
-        assertThat({ lens(WsMessage("not json")) },
+        assertThat(
+            { lens(WsMessage("not json")) },
             throws(
                 has(
                     LensFailure::failures,
-                    equalTo(listOf(Invalid(Meta(true, "body", ObjectParam, "graphql-ws message"))))
+                    equalTo(listOf(Invalid(Meta(true, "body", ParamMeta.ObjectParam, "graphql-ws message"))))
                 )
             )
         )
