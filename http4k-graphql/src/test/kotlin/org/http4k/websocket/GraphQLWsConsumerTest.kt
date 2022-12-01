@@ -248,6 +248,40 @@ class GraphQLWsConsumerTest {
     }
 
     @Test
+    fun `on subscribe for single non-streaming result results in one next and one complete message`(approver: Approver) {
+        GraphQLWsConsumer {
+            completedFuture(FakeExecutionResult(data = 1))
+        }.withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            val messagesById = receivedMessages().take(3).toList()
+
+            approver.assertApproved(messagesById)
+        }
+    }
+
+    @Test
+    fun `on subscribe for single non-streaming error results in one error message and no complete`(approver: Approver) {
+        GraphQLWsConsumer {
+            completedFuture(FakeExecutionResult(errors = listOf(
+                newValidationError()
+                    .validationErrorType(ValidationErrorType.FieldUndefined)
+                    .description("someField")
+                    .sourceLocation(SourceLocation(12, 34))
+                    .build()
+            )))
+        }.withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            val messagesById = receivedMessages().take(3).toList()
+
+            approver.assertApproved(messagesById)
+        }
+    }
+
+    @Test
     fun `on complete stops sending messages for active subscription`(approver: Approver) {
         GraphQLWsConsumer {
             val data = listOf(1, 2, 3).asFlow().onEach { if (it > 1) delay(40) }.asPublisher()

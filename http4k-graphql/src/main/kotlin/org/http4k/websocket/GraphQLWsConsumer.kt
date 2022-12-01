@@ -121,7 +121,10 @@ class GraphQLWsConsumer(
                                         if (result.isDataPresent) {
                                             when (val data = result.getData<Any?>()) {
                                                 is Publisher<*> -> data.subscribe(dataSubscriber)
-                                                else -> TODO("handle null data or not publisher")
+                                                else -> {
+                                                    sendNext(id, data)
+                                                    sendComplete(id)
+                                                }
                                             }
                                         } else {
                                             sendError(id, result.errors)
