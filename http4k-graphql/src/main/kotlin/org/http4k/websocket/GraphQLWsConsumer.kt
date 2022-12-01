@@ -32,21 +32,55 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class GraphQLWsConsumer(
     private val onSubscribe: (Subscribe) -> CompletionStage<ExecutionResult>,
-    private val onConnectionInit: (ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
+    private val onConnect: (ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val onPing: (Ping) -> Pong = { Pong(payload = null) },
     private val onPong: (Pong) -> Unit = {},
-    private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(10)
+    private val onClose: (WsStatus) -> Unit = {},
+    private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3)
 ) : WsConsumer, AutoCloseable {
 
     private val json: AutoMarshalling = Jackson
 
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
     private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
-    private val subscriptions = ConcurrentHashMap<String, DataSubscriber>()
 
     override fun invoke(ws: Websocket) {
-        val connectionInitTimeoutCheck = ws.scheduleConnectionInitTimeoutCheck()
         val connectionInitReceived = AtomicBoolean(false)
+        val onCloseTasks = mutableListOf(onClose)
+        val subscriptions = ConcurrentHashMap<String, GraphQLWsDataSubscriber>()
+
+        fun sendNext(id: String, payload: Any?) {
+            ws.send(Next(id, payload))
+        }
+
+        fun sendError(id: String, errors: List<GraphQLError>) {
+            subscriptions.remove(id)
+            ws.send(Error(id, errors.map { it.toSpecification() }))
+        }
+
+        fun sendComplete(id: String) {
+            subscriptions.remove(id)
+            ws.send(Complete(id))
+        }
+
+        fun close(status: WsStatus) {
+            subscriptions.forEach { ( _, subscriber) ->
+                subscriber.cancel()
+            }
+            subscriptions.clear()
+            ws.close(status)
+            onCloseTasks.forEach { it(status) }
+        }
+
+        val connectionInitTimeoutCheck = executor.schedule(
+            { close(connectionInitTimeoutStatus) },
+            connectionInitWaitTimeout.toMillis(), TimeUnit.MILLISECONDS
+        )
+        onCloseTasks += {
+            if (!connectionInitTimeoutCheck.isDone) {
+                connectionInitTimeoutCheck.cancel(false)
+            }
+        }
 
         ws.onMessage { message ->
             try {
@@ -54,10 +88,10 @@ class GraphQLWsConsumer(
                     is ConnectionInit -> {
                         if (connectionInitReceived.compareAndSet(false, true)) {
                             connectionInitTimeoutCheck.cancel(false)
-                            onConnectionInit(graphQLMessage)?.let { ws.send(it) }
-                                ?: ws.close(forbiddenStatus)
+                            onConnect(graphQLMessage)?.let { ws.send(it) }
+                                ?: close(forbiddenStatus)
                         } else {
-                            ws.close(multipleConnectionInitStatus)
+                            close(multipleConnectionInitStatus)
                         }
                     }
 
@@ -68,11 +102,11 @@ class GraphQLWsConsumer(
                     is Subscribe -> {
                         if (connectionInitReceived.get()) {
                             val id = graphQLMessage.id
-                            val dataSubscriber = DataSubscriber(id, ws)
+                            val dataSubscriber = GraphQLWsDataSubscriber(id, ::sendNext, ::sendComplete, ::sendError)
                             if (subscriptions.putIfAbsent(id, dataSubscriber) == null) {
                                 onSubscribe(graphQLMessage).handle { result, exception: Throwable? ->
                                     if (exception != null) {
-                                        ws.sendError(id, listOf(exception.toGraphQLError()))
+                                        sendError(id, listOf(exception.toGraphQLError()))
                                     } else {
                                         if (result.isDataPresent) {
                                             when (val data = result.getData<Any?>()) {
@@ -80,15 +114,15 @@ class GraphQLWsConsumer(
                                                 else -> TODO("handle null data or not publisher")
                                             }
                                         } else {
-                                            ws.sendError(id, result.errors)
+                                            sendError(id, result.errors)
                                         }
                                     }
                                 }
                             } else {
-                                ws.close(subscriberAlreadyExistsStatus(id))
+                                close(subscriberAlreadyExistsStatus(id))
                             }
                         } else {
-                            ws.close(unauthorizedStatus)
+                            close(unauthorizedStatus)
                         }
                     }
 
@@ -101,78 +135,20 @@ class GraphQLWsConsumer(
                     is Error -> ignored
                 }
             } catch (e: LensFailure) {
-                ws.close(badRequestStatus(e))
+                close(badRequestStatus(e))
             } catch (e: Exception) {
-                ws.close(internalServerErrorStatus)
+                close(internalServerErrorStatus)
             }
         }
 
-        ws.onClose {
-            if (!connectionInitTimeoutCheck.isDone) {
-                connectionInitTimeoutCheck.cancel(false)
-            }
-        }
+        ws.onClose { close(it) }
     }
 
     override fun close() {
         executor.shutdown()
-        subscriptions.forEach { ( _, subscriber) ->
-            subscriber.cancel()
-        }
     }
-
-    private fun Websocket.scheduleConnectionInitTimeoutCheck() =
-        executor.schedule({ close(connectionInitTimeoutStatus) },
-            connectionInitWaitTimeout.toMillis(), TimeUnit.MILLISECONDS)
 
     private fun Websocket.send(message: GraphQLWsMessage): Unit = send(WsMessage(json.asFormatString(message)))
-
-    private fun Websocket.sendError(id: String, errors: List<GraphQLError>) {
-        subscriptions.remove(id)
-        send(Error(id, errors.map { it.toSpecification() }))
-    }
-
-    private fun Websocket.sendComplete(id: String) {
-        subscriptions.remove(id)
-        send(Complete(id))
-    }
-
-    @Suppress("ReactiveStreamsSubscriberImplementation")
-    private inner class DataSubscriber(private val subscriptionId: String, private val ws: Websocket) : Subscriber<Any>{
-        private var subscription: Subscription? = null
-
-        override fun onSubscribe(sub: Subscription) {
-            subscription = sub
-            subscription?.request(1)
-        }
-
-        override fun onNext(next: Any) = doSafely {
-            ws.send(Next(subscriptionId, next))
-            subscription?.request(1)
-        }
-
-        override fun onError(error: Throwable) {
-            subscription?.cancel()
-            ws.sendError(subscriptionId, listOf(error.toGraphQLError()))
-        }
-
-        override fun onComplete() = doSafely {
-            ws.sendComplete(subscriptionId)
-        }
-
-        fun cancel() {
-            subscription?.cancel()
-        }
-
-        private fun doSafely(block: () -> Unit) {
-            try {
-                block()
-            } catch (e: Throwable) {
-                subscription?.cancel()
-                throw e
-            }
-        }
-    }
 
     companion object {
         private fun badRequestStatus(e: LensFailure) = WsStatus(4400, e.localizedMessage)
@@ -182,16 +158,6 @@ class GraphQLWsConsumer(
         private fun subscriberAlreadyExistsStatus(id: String) = WsStatus(4409, "Subscriber for '$id' already exists")
         private val multipleConnectionInitStatus = WsStatus(4429, "Too many initialisation requests")
         private val internalServerErrorStatus = WsStatus(4500, "Internal server error")
-
-        private fun Throwable.toGraphQLError(): GraphQLError =
-            if (this is GraphQLError) {
-                this
-            } else {
-                GraphqlErrorException.newErrorException()
-                    .cause(this)
-                    .message(this.localizedMessage)
-                    .build()
-            }
 
         private val ignored: () -> Unit = {}
     }
@@ -220,6 +186,58 @@ private class GraphQLWsMessageLens(private val json: AutoMarshalling) : Lens<WsM
             }
         }
     }
-)
+) {
+    private data class MessageType(val type: String?)
+}
 
-private data class MessageType(val type: String?)
+@Suppress("ReactiveStreamsSubscriberImplementation")
+private class GraphQLWsDataSubscriber(
+    private val subscriptionId: String,
+    private val sendNext: (String, Any?) -> Unit,
+    private val sendComplete: (String) -> Unit,
+    private val sendError: (String, List<GraphQLError>) -> Unit
+) : Subscriber<Any?> {
+    private var subscription: Subscription? = null
+
+    override fun onSubscribe(sub: Subscription) {
+        subscription = sub
+        subscription?.request(1)
+    }
+
+    override fun onNext(next: Any?) = doSafely {
+        sendNext(subscriptionId, next)
+        subscription?.request(1)
+    }
+
+    override fun onError(error: Throwable) = doSafely {
+        subscription?.cancel()
+        sendError(subscriptionId, listOf(error.toGraphQLError()))
+    }
+
+    override fun onComplete() = doSafely {
+        sendComplete(subscriptionId)
+    }
+
+    fun cancel() {
+        subscription?.cancel()
+    }
+
+    private fun doSafely(block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            subscription?.cancel()
+            throw e
+        }
+    }
+}
+
+private fun Throwable.toGraphQLError(): GraphQLError =
+    if (this is GraphQLError) {
+        this
+    } else {
+        GraphqlErrorException.newErrorException()
+            .cause(this)
+            .message(this.localizedMessage)
+            .build()
+    }

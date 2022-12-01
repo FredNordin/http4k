@@ -52,7 +52,7 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on connection_init a connection_ack message is sent with result from onConnectionInit`(approver: Approver) =
-        GraphQLWsConsumer(emptyResult, onConnectionInit = { ConnectionAck(it.payload) }).withTestClient {
+        GraphQLWsConsumer(emptyResult, onConnect = { ConnectionAck(it.payload) }).withTestClient {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
             approver.assertApproved(receivedMessages().take(1).toList())
@@ -60,7 +60,7 @@ class GraphQLWsConsumerTest {
 
     @Test
     fun `on connection_init the socket is closed when onConnectionInit returns null`() =
-        GraphQLWsConsumer(emptyResult, onConnectionInit = { null }).withTestClient {
+        GraphQLWsConsumer(emptyResult, onConnect = { null }).withTestClient {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
             assertThat({ receivedMessages().take(1).toList() },
@@ -316,6 +316,17 @@ class GraphQLWsConsumerTest {
         }
     }
 
+    @Test
+    fun `onClose is called when the socket is closed`() {
+        var onCloseStatus: WsStatus? = null
+        GraphQLWsConsumer(emptyResult, onClose = { onCloseStatus = it }).withTestClient {
+            sendSubscribe("subscribe-1")
+
+            assertThat({ receivedMessages().take(1).toList() }, throws<ClosedWebsocket>())
+            assertThat(onCloseStatus, present(hasStatus(4401, "Unauthorized")))
+        }
+    }
+
     companion object {
         private val json = Jackson
 
@@ -345,10 +356,11 @@ class GraphQLWsConsumerTest {
             completedFuture(FakeExecutionResult(data = emptyFlow<Int>().asPublisher()))
         }
 
-        private fun closedWebsocketWithStatus(code: Int, description: String): Matcher<ClosedWebsocket> = has(
-            ClosedWebsocket::status,
+        private fun closedWebsocketWithStatus(code: Int, description: String): Matcher<ClosedWebsocket> =
+            has(ClosedWebsocket::status, hasStatus(code, description))
+
+        private fun hasStatus(code: Int, description: String): Matcher<WsStatus> =
             has(WsStatus::code, equalTo(code)) and has(WsStatus::description, equalTo(description))
-        )
 
         private fun GraphQLWsConsumer.withTestClient(block: TestWsClient.() -> Unit) {
             use {
