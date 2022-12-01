@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class GraphQLWsConsumer(
-    private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>,
+    private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3),
     private val onConnect: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val onPing: Request.(Ping) -> Pong = { Pong(payload = null) },
     private val onPong: Request.(Pong) -> Unit = {},
@@ -40,7 +40,7 @@ class GraphQLWsConsumer(
     private val onComplete: Request.(Complete) -> Unit = {},
     private val onError: Request.(Error, List<GraphQLError>) -> Unit = { _, _ -> },
     private val onClose: Request.(WsStatus) -> Unit = {},
-    private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3)
+    private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>
 ) : WsConsumer, AutoCloseable {
 
     private val json: AutoMarshalling = Jackson
