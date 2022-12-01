@@ -34,7 +34,9 @@ import org.http4k.testing.ClosedWebsocket
 import org.http4k.testing.JsonApprovalTest
 import org.http4k.testing.TestWsClient
 import org.http4k.testing.testWsClient
+import org.http4k.websocket.GraphQLWsMessage.Complete
 import org.http4k.websocket.GraphQLWsMessage.ConnectionAck
+import org.http4k.websocket.GraphQLWsMessage.Next
 import org.http4k.websocket.GraphQLWsMessage.Pong
 import org.http4k.websocket.GraphQLWsMessage.Subscribe
 import org.junit.jupiter.api.Test
@@ -344,6 +346,39 @@ class GraphQLWsConsumerTest {
             receivedMessages().take(2).toList()
 
             assertThat(onErrorList, present(allElements(has(GraphQLError::getMessage, equalTo("Boom!")))))
+        }
+    }
+
+    @Test
+    fun `onNext is called when each next message is sent`(approver: Approver) {
+        val onNextValues = mutableListOf<Next>()
+        val onSubscribe: OnSubscribe = {
+            completedFuture(FakeExecutionResult(data = listOf(1, 2).asFlow().asPublisher()))
+        }
+        GraphQLWsConsumer(onSubscribe, onNext = { onNextValues += it }).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            receivedMessages().take(3).toList()
+
+            assertThat(onNextValues, equalTo(listOf(Next("subscribe-1", 1), Next("subscribe-1", 2))))
+        }
+    }
+
+    @Test
+    fun `onComplete is called when each complete message is sent`(approver: Approver) {
+        val onCompleteValues = mutableListOf<Complete>()
+        val onSubscribe: OnSubscribe = {
+            completedFuture(FakeExecutionResult(data = listOf(1).asFlow().asPublisher()))
+        }
+        GraphQLWsConsumer(onSubscribe, onComplete = { onCompleteValues += it }).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+            sendSubscribe("subscribe-2")
+
+            receivedMessages().take(5).toList()
+
+            assertThat(onCompleteValues, equalTo(listOf(Complete("subscribe-1"), Complete("subscribe-2"))))
         }
     }
 

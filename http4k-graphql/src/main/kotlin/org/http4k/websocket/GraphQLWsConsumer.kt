@@ -36,6 +36,8 @@ class GraphQLWsConsumer(
     private val onConnect: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val onPing: Request.(Ping) -> Pong = { Pong(payload = null) },
     private val onPong: Request.(Pong) -> Unit = {},
+    private val onNext: Request.(Next) -> Unit = {},
+    private val onComplete: Request.(Complete) -> Unit = {},
     private val onError: Request.(Error, List<GraphQLError>) -> Unit = { _, _ -> },
     private val onClose: Request.(WsStatus) -> Unit = {},
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3)
@@ -52,7 +54,9 @@ class GraphQLWsConsumer(
         val subscriptions = ConcurrentHashMap<String, GraphQLWsDataSubscriber>()
 
         fun sendNext(id: String, payload: Any?) {
-            ws.send(Next(id, payload))
+            val next = Next(id, payload)
+            onNext(ws.upgradeRequest, next)
+            ws.send(next)
         }
 
         fun sendError(id: String, errors: List<GraphQLError>) {
@@ -64,7 +68,9 @@ class GraphQLWsConsumer(
 
         fun sendComplete(id: String) {
             subscriptions.remove(id)
-            ws.send(Complete(id))
+            val complete = Complete(id)
+            onComplete(ws.upgradeRequest, complete)
+            ws.send(complete)
         }
 
         fun close(status: WsStatus) {
