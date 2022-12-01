@@ -6,12 +6,7 @@ import graphql.GraphqlErrorException
 import org.http4k.core.Request
 import org.http4k.format.AutoMarshalling
 import org.http4k.format.Jackson
-import org.http4k.lens.Invalid
-import org.http4k.lens.Lens
 import org.http4k.lens.LensFailure
-import org.http4k.lens.Meta
-import org.http4k.lens.Missing
-import org.http4k.lens.ParamMeta
 import org.http4k.websocket.GraphQLWsMessage.Complete
 import org.http4k.websocket.GraphQLWsMessage.ConnectionAck
 import org.http4k.websocket.GraphQLWsMessage.ConnectionInit
@@ -174,33 +169,6 @@ class GraphQLWsConsumer(
 
         private val ignored: () -> Unit = {}
     }
-}
-
-private class GraphQLWsMessageLens(private val json: AutoMarshalling) : Lens<WsMessage, GraphQLWsMessage>(
-    Meta(true, "body", ParamMeta.ObjectParam, "graphql-ws message"),
-    { wsMessage ->
-        val body = wsMessage.bodyString()
-        when (val type = json.asA<MessageType>(body).type) {
-            "connection_init" -> json.asA<ConnectionInit>(body)
-            "connection_ack" -> json.asA<ConnectionAck>(body)
-            "ping" -> json.asA<Ping>(body)
-            "pong" -> json.asA<Pong>(body)
-            "subscribe" -> json.asA<Subscribe>(body)
-            "next" -> json.asA<Next>(body)
-            "error" -> json.asA<Error>(body)
-            "complete" -> json.asA<Complete>(body)
-            else -> {
-                val typeMeta = Meta(true, "graphql-ws message field", ParamMeta.StringParam, "type")
-                if (type == null) {
-                    throw LensFailure(Missing(typeMeta))
-                } else {
-                    throw LensFailure(Invalid(typeMeta))
-                }
-            }
-        }
-    }
-) {
-    private data class MessageType(val type: String?)
 }
 
 @Suppress("ReactiveStreamsSubscriberImplementation")

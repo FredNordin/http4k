@@ -6,5 +6,6 @@ dependencies {
     api("com.graphql-java:graphql-java:_")
     compileOnly(project(":http4k-realtime-core"))
     testImplementation(project(path = ":http4k-core", configuration = "testArtifacts"))
+    testImplementation(Testing.junit.jupiter.params)
     testImplementation("com.expediagroup:graphql-kotlin-schema-generator:_")
 }
