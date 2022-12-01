@@ -2,6 +2,7 @@ package org.http4k.websocket
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.natpryce.hamkrest.Matcher
+import com.natpryce.hamkrest.allElements
 import com.natpryce.hamkrest.and
 import com.natpryce.hamkrest.assertion.assertThat
 import com.natpryce.hamkrest.equalTo
@@ -39,7 +40,6 @@ import org.http4k.websocket.GraphQLWsMessage.Subscribe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
-import java.lang.IllegalStateException
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletableFuture.completedFuture
@@ -324,6 +324,26 @@ class GraphQLWsConsumerTest {
 
             assertThat({ receivedMessages().take(1).toList() }, throws<ClosedWebsocket>())
             assertThat(onCloseStatus, present(hasStatus(4401, "Unauthorized")))
+        }
+    }
+
+    @Test
+    fun `onError is called when there is a GQL error`() {
+        var onErrorList: List<GraphQLError>? = null
+        val onSubscribe: OnSubscribe = {
+            val data = listOf { throw IllegalStateException("Boom!") }
+                .asFlow().map { it() }.asPublisher()
+            completedFuture(FakeExecutionResult(data = data))
+        }
+        GraphQLWsConsumer(onSubscribe, onError = { error, graphQLErrors ->
+            onErrorList = graphQLErrors.takeIf { error.id == "subscribe-1" }
+        }).withTestClient {
+            sendConnectionInit()
+            sendSubscribe("subscribe-1")
+
+            receivedMessages().take(2).toList()
+
+            assertThat(onErrorList, present(allElements(has(GraphQLError::getMessage, equalTo("Boom!")))))
         }
     }
 

@@ -36,6 +36,7 @@ class GraphQLWsConsumer(
     private val onConnect: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val onPing: Request.(Ping) -> Pong = { Pong(payload = null) },
     private val onPong: Request.(Pong) -> Unit = {},
+    private val onError: Request.(Error, List<GraphQLError>) -> Unit = { _, _ -> },
     private val onClose: Request.(WsStatus) -> Unit = {},
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3)
 ) : WsConsumer, AutoCloseable {
@@ -56,7 +57,9 @@ class GraphQLWsConsumer(
 
         fun sendError(id: String, errors: List<GraphQLError>) {
             subscriptions.remove(id)
-            ws.send(Error(id, errors.map { it.toSpecification() }))
+            val error = Error(id, errors.map { it.toSpecification() })
+            onError(ws.upgradeRequest, error, errors)
+            ws.send(error)
         }
 
         fun sendComplete(id: String) {
