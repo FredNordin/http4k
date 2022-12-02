@@ -2,13 +2,9 @@ package org.http4k.websocket
 
 import graphql.ExecutionResult
 import graphql.GraphQLError
-import graphql.GraphqlErrorException
 import org.http4k.core.Request
-import org.http4k.format.AutoMarshalling
 import org.http4k.format.Jackson
 import org.http4k.graphql.ws.GraphQLWsMessage
-import org.http4k.lens.GraphQLWsMessageLens
-import org.http4k.lens.LensFailure
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionInit
@@ -17,16 +13,11 @@ import org.http4k.graphql.ws.GraphQLWsMessage.Next
 import org.http4k.graphql.ws.GraphQLWsMessage.Ping
 import org.http4k.graphql.ws.GraphQLWsMessage.Pong
 import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
+import org.http4k.lens.LensFailure
 import org.reactivestreams.Publisher
-import org.reactivestreams.Subscriber
-import org.reactivestreams.Subscription
 import java.time.Duration
 import java.util.concurrent.CompletionStage
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 class GraphQLWsServer(
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3),
@@ -38,127 +29,105 @@ class GraphQLWsServer(
     private val onError: Request.(Error, List<GraphQLError>) -> Unit = { _, _ -> },
     private val onClose: Request.(WsStatus) -> Unit = {},
     private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>
-) : WsConsumer, AutoCloseable {
+) : GraphQLWsProtocolHandler<GraphQLWsServer.Session>(Jackson), AutoCloseable {
 
-    private val json: AutoMarshalling = Jackson
+    override fun Websocket.createSession(executor: ScheduledExecutorService, send: (GraphQLWsMessage) -> Unit): Session =
+        Session(this, executor, send, connectionInitWaitTimeout, onConnect, onPing, onPong, onSubscribe, onNext, onComplete, onError, onClose)
 
-    private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
-    private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
-
-    override fun invoke(ws: Websocket) {
-        val connectionInitReceived = AtomicBoolean(false)
-        val onCloseTasks = mutableListOf(onClose)
-        val subscriptions = ConcurrentHashMap<String, GraphQLWsDataSubscriber>()
-
-        fun sendNext(id: String, payload: Any?) {
-            val next = Next(id, payload)
-            onNext(ws.upgradeRequest, next)
-            ws.send(next)
+    override fun Throwable.toStatus(): WsStatus =
+        when (this) {
+            is LensFailure -> badRequestStatus(this)
+            else -> internalServerErrorStatus
         }
 
-        fun sendError(id: String, errors: List<GraphQLError>) {
-            subscriptions.remove(id)
-            val error = Error(id, errors.map { it.toSpecification() })
-            onError(ws.upgradeRequest, error, errors)
-            ws.send(error)
-        }
+    class Session(
+        ws: Websocket,
+        executor: ScheduledExecutorService,
+        send: (GraphQLWsMessage) -> Unit,
+        connectionInitWaitTimeout: Duration,
+        private val onConnect: Request.(ConnectionInit) -> ConnectionAck?,
+        private val onPing: Request.(Ping) -> Pong,
+        private val onPong: Request.(Pong) -> Unit,
+        private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>,
+        onNext: Request.(Next) -> Unit,
+        onComplete: Request.(Complete) -> Unit,
+        onError: Request.(Error, List<GraphQLError>) -> Unit,
+        private val onClose: Request.(WsStatus) -> Unit
+    ) : GraphQLWsSession(ws, executor, send) {
 
-        fun sendComplete(id: String) {
-            subscriptions.remove(id)
-            val complete = Complete(id)
-            onComplete(ws.upgradeRequest, complete)
-            ws.send(complete)
-        }
+        private val connectionInitTimeoutCheck = { close(connectionInitTimeoutStatus) }.scheduleAfter(connectionInitWaitTimeout)
 
-        fun close(status: WsStatus) {
-            subscriptions.forEach { ( _, subscriber) ->
-                subscriber.cancel()
-            }
-            subscriptions.clear()
-            ws.close(status)
-            onCloseTasks.forEach { it(ws.upgradeRequest, status) }
-        }
-
-        val connectionInitTimeoutCheck = executor.schedule(
-            { close(connectionInitTimeoutStatus) },
-            connectionInitWaitTimeout.toMillis(), TimeUnit.MILLISECONDS
-        )
-        onCloseTasks.add(0) {
-            if (!connectionInitTimeoutCheck.isDone) {
-                connectionInitTimeoutCheck.cancel(false)
+        init {
+            onNext(onNext)
+            onComplete(onComplete)
+            onError(onError)
+            onClose {
+                if (!connectionInitTimeoutCheck.isDone) {
+                    connectionInitTimeoutCheck.cancel(false)
+                }
+                onClose(originalRequest, it)
             }
         }
 
-        ws.onMessage { message ->
-            try {
-                when (val graphQLMessage = graphqlWsMessageBody(message)) {
-                    is ConnectionInit -> {
-                        if (connectionInitReceived.compareAndSet(false, true)) {
-                            connectionInitTimeoutCheck.cancel(false)
-                            onConnect(ws.upgradeRequest, graphQLMessage)?.let { ws.send(it) }
-                                ?: close(forbiddenStatus)
-                        } else {
-                            close(multipleConnectionInitStatus)
+        override fun handle(message: GraphQLWsMessage) {
+            when (message) {
+                is ConnectionInit -> {
+                    onConnect(originalRequest, message)
+                        ?.let { connectionAck ->
+                            if (markAsConnected()) {
+                                connectionInitTimeoutCheck.cancel(false)
+                                send(connectionAck)
+                            } else {
+                                close(multipleConnectionInitStatus)
+                            }
                         }
-                    }
+                        ?: close(forbiddenStatus)
+                }
 
-                    is Ping -> ws.send(onPing(ws.upgradeRequest, graphQLMessage))
+                is Ping -> send(onPing(originalRequest, message))
 
-                    is Pong -> onPong(ws.upgradeRequest, graphQLMessage)
+                is Pong -> onPong(originalRequest, message)
 
-                    is Subscribe -> {
-                        if (connectionInitReceived.get()) {
-                            val id = graphQLMessage.id
-                            val dataSubscriber = GraphQLWsDataSubscriber(id, ::sendNext, ::sendComplete, ::sendError)
-                            if (subscriptions.putIfAbsent(id, dataSubscriber) == null) {
-                                onSubscribe(ws.upgradeRequest, graphQLMessage).handle { result, exception: Throwable? ->
-                                    if (exception != null) {
-                                        sendError(id, listOf(exception.toGraphQLError()))
-                                    } else {
-                                        if (result.isDataPresent) {
-                                            when (val data = result.getData<Any?>()) {
-                                                is Publisher<*> -> data.subscribe(dataSubscriber)
-                                                else -> {
-                                                    sendNext(id, data)
-                                                    sendComplete(id)
-                                                }
+                is Subscribe -> {
+                    if (connected) {
+                        val id = message.id
+
+                        newSubscription(id, onExists = { close(subscriberAlreadyExistsStatus(it)) }) { subscriber ->
+                            onSubscribe(originalRequest, message).handle { result, exception: Throwable? ->
+                                if (exception != null) {
+                                    sendError(id, exception)
+                                } else {
+                                    if (result.isDataPresent) {
+                                        when (val data = result.getData<Any?>()) {
+                                            is Publisher<*> -> {
+                                                data.subscribe(subscriber)
                                             }
-                                        } else {
-                                            sendError(id, result.errors)
+                                            else -> {
+                                                sendNext(id, data)
+                                                sendComplete(id)
+                                            }
                                         }
+                                    } else {
+                                        sendError(id, result.errors)
                                     }
                                 }
-                            } else {
-                                close(subscriberAlreadyExistsStatus(id))
                             }
-                        } else {
-                            close(unauthorizedStatus)
                         }
+                    } else {
+                        close(unauthorizedStatus)
                     }
-
-                    is Complete -> {
-                        subscriptions.remove(graphQLMessage.id)?.cancel()
-                    }
-
-                    is ConnectionAck -> ignored
-                    is Next -> ignored
-                    is Error -> ignored
                 }
-            } catch (e: LensFailure) {
-                close(badRequestStatus(e))
-            } catch (e: Exception) {
-                close(internalServerErrorStatus)
+
+                is Complete -> {
+                    cancelSubscription(message.id)
+                }
+
+                is ConnectionAck -> ignored
+                is Next -> ignored
+                is Error -> ignored
             }
         }
-
-        ws.onClose { close(it) }
     }
-
-    override fun close() {
-        executor.shutdown()
-    }
-
-    private fun Websocket.send(message: GraphQLWsMessage): Unit = send(WsMessage(json.asFormatString(message)))
 
     companion object {
         private fun badRequestStatus(e: LensFailure) = WsStatus(4400, e.localizedMessage)
@@ -172,55 +141,3 @@ class GraphQLWsServer(
         private val ignored: () -> Unit = {}
     }
 }
-
-@Suppress("ReactiveStreamsSubscriberImplementation")
-private class GraphQLWsDataSubscriber(
-    private val subscriptionId: String,
-    private val sendNext: (String, Any?) -> Unit,
-    private val sendComplete: (String) -> Unit,
-    private val sendError: (String, List<GraphQLError>) -> Unit
-) : Subscriber<Any?> {
-    private var subscription: Subscription? = null
-
-    override fun onSubscribe(sub: Subscription) {
-        subscription = sub
-        subscription?.request(1)
-    }
-
-    override fun onNext(next: Any?) = doSafely {
-        sendNext(subscriptionId, next)
-        subscription?.request(1)
-    }
-
-    override fun onError(error: Throwable) = doSafely {
-        subscription?.cancel()
-        sendError(subscriptionId, listOf(error.toGraphQLError()))
-    }
-
-    override fun onComplete() = doSafely {
-        sendComplete(subscriptionId)
-    }
-
-    fun cancel() {
-        subscription?.cancel()
-    }
-
-    private fun doSafely(block: () -> Unit) {
-        try {
-            block()
-        } catch (e: Throwable) {
-            subscription?.cancel()
-            throw e
-        }
-    }
-}
-
-private fun Throwable.toGraphQLError(): GraphQLError =
-    if (this is GraphQLError) {
-        this
-    } else {
-        GraphqlErrorException.newErrorException()
-            .cause(this)
-            .message(this.localizedMessage)
-            .build()
-    }
