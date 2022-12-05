@@ -23,16 +23,29 @@ class GraphQLWsServer(
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3),
     private val onConnect: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val onPing: Request.(Ping) -> Pong = { Pong(payload = null) },
-    private val onPong: Request.(Pong) -> Unit = {},
-    private val onNext: Request.(Next) -> Unit = {},
-    private val onComplete: Request.(Complete) -> Unit = {},
     private val onError: Request.(Error, List<GraphQLError>) -> Unit = { _, _ -> },
-    private val onClose: Request.(WsStatus) -> Unit = {},
+    onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>
 ) : GraphQLWsProtocolHandler<GraphQLWsServer.Session>(Jackson), AutoCloseable {
 
-    override fun Websocket.createSession(executor: ScheduledExecutorService, send: (GraphQLWsMessage) -> Unit): Session =
-        Session(this, executor, send, connectionInitWaitTimeout, onConnect, onPing, onPong, onSubscribe, onNext, onComplete, onError, onClose)
+    init {
+        onEvent(onEvent)
+    }
+
+    override fun Websocket.createSession(executor: ScheduledExecutorService,
+                                         send: (GraphQLWsMessage) -> Unit,
+                                         emitEvent: Request.(GraphQLWsEvent) -> Unit): Session =
+        Session(
+            this,
+            executor,
+            send,
+            emitEvent,
+            connectionInitWaitTimeout,
+            onConnect,
+            onPing,
+            onSubscribe,
+            onError
+        )
 
     override fun Throwable.toStatus(): WsStatus =
         when (this) {
@@ -44,29 +57,18 @@ class GraphQLWsServer(
         ws: Websocket,
         executor: ScheduledExecutorService,
         send: (GraphQLWsMessage) -> Unit,
+        emitEvent: Request.(GraphQLWsEvent) -> Unit,
         connectionInitWaitTimeout: Duration,
         private val onConnect: Request.(ConnectionInit) -> ConnectionAck?,
         private val onPing: Request.(Ping) -> Pong,
-        private val onPong: Request.(Pong) -> Unit,
         private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>,
-        onNext: Request.(Next) -> Unit,
-        onComplete: Request.(Complete) -> Unit,
-        onError: Request.(Error, List<GraphQLError>) -> Unit,
-        private val onClose: Request.(WsStatus) -> Unit
-    ) : GraphQLWsSession(ws, executor, send) {
+        onError: Request.(Error, List<GraphQLError>) -> Unit
+    ) : GraphQLWsSession(ws, executor, send, emitEvent) {
 
         private val connectionInitTimeoutCheck = { close(connectionInitTimeoutStatus) }.scheduleAfter(connectionInitWaitTimeout)
 
         init {
-            onNext(onNext)
-            onComplete(onComplete)
             onError(onError)
-            onClose {
-                if (!connectionInitTimeoutCheck.isDone) {
-                    connectionInitTimeoutCheck.cancel(false)
-                }
-                onClose(originalRequest, it)
-            }
         }
 
         override fun handle(message: GraphQLWsMessage) {
@@ -85,8 +87,6 @@ class GraphQLWsServer(
                 }
 
                 is Ping -> send(onPing(originalRequest, message))
-
-                is Pong -> onPong(originalRequest, message)
 
                 is Subscribe -> {
                     if (connected) {
@@ -123,6 +123,7 @@ class GraphQLWsServer(
                 }
 
                 is ConnectionAck -> ignored
+                is Pong -> ignored
                 is Next -> ignored
                 is Error -> ignored
             }

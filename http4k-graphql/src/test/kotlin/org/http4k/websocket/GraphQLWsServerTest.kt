@@ -7,6 +7,7 @@ import com.natpryce.hamkrest.and
 import com.natpryce.hamkrest.assertion.assertThat
 import com.natpryce.hamkrest.equalTo
 import com.natpryce.hamkrest.has
+import com.natpryce.hamkrest.isA
 import com.natpryce.hamkrest.present
 import com.natpryce.hamkrest.throws
 import graphql.ExecutionResult
@@ -27,6 +28,7 @@ import org.http4k.core.Response
 import org.http4k.core.Status
 import org.http4k.core.with
 import org.http4k.format.Jackson
+import org.http4k.graphql.GraphQLRequest
 import org.http4k.graphql.ws.GraphQLWsMessage
 import org.http4k.lens.Header
 import org.http4k.routing.websockets
@@ -37,7 +39,9 @@ import org.http4k.testing.TestWsClient
 import org.http4k.testing.testWsClient
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
+import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionInit
 import org.http4k.graphql.ws.GraphQLWsMessage.Next
+import org.http4k.graphql.ws.GraphQLWsMessage.Ping
 import org.http4k.graphql.ws.GraphQLWsMessage.Pong
 import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
 import org.junit.jupiter.api.Test
@@ -47,7 +51,6 @@ import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletableFuture.completedFuture
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 @Timeout(5, unit = TimeUnit.SECONDS)
 @ExtendWith(JsonApprovalTest::class)
@@ -95,18 +98,6 @@ class GraphQLWsServerTest {
 
             approver.assertApproved(receivedMessages().take(2).toList())
         }
-
-    @Test
-    fun `on pong no message is sent and onPong is invoked`(approver: Approver) {
-        val onPongInvoked = AtomicBoolean(false)
-        GraphQLWsServer(onPong = { onPongInvoked.set(it.payload?.get("some") != null) }, onSubscribe = emptyResult).withTestClient {
-            sendConnectionInit()
-            send { obj("type" to string("pong"), "payload" to obj("some" to string("value"))) }
-
-            approver.assertApproved(receivedMessages().take(2).toList())
-            assertThat(onPongInvoked.get(), equalTo(true))
-        }
-    }
 
     @Test
     fun `on subscribe one next message is sent per result and one complete is sent when done`(approver: Approver) {
@@ -331,25 +322,15 @@ class GraphQLWsServerTest {
     }
 
     @Test
-    fun `on connection_ack or next or error the messages are ignored`(approver: Approver) {
+    fun `on connection_ack or next or error or pong the messages are ignored`(approver: Approver) {
         GraphQLWsServer(onSubscribe = emptyResult).withTestClient {
             sendConnectionInit()
             send { obj("type" to string("connection_ack")) }
             send { obj("type" to string("next"), "id" to string("anId")) }
             send { obj("type" to string("error"), "id" to string("anId"), "payload" to array(emptyList())) }
+            send { obj("type" to string("pong")) }
 
             approver.assertApproved(receivedMessages().take(2).toList())
-        }
-    }
-
-    @Test
-    fun `onClose is called when the socket is closed`() {
-        var onCloseStatus: WsStatus? = null
-        GraphQLWsServer(onClose = { onCloseStatus = it }, onSubscribe = emptyResult).withTestClient {
-            sendSubscribe("subscribe-1")
-
-            assertThat({ receivedMessages().take(1).toList() }, throws<ClosedWebsocket>())
-            assertThat(onCloseStatus, present(hasStatus(4401, "Unauthorized")))
         }
     }
 
@@ -373,33 +354,58 @@ class GraphQLWsServerTest {
     }
 
     @Test
-    fun `onNext is called when each next message is sent`(approver: Approver) {
-        val onNextValues = mutableListOf<Next>()
-        GraphQLWsServer(onNext = { onNextValues += it }) {
+    fun `onEvent is called when each message is sent`(approver: Approver) {
+        val events = mutableListOf<GraphQLWsEvent>()
+        GraphQLWsServer(onEvent = { events += it }) {
             completedFuture(FakeExecutionResult(data = listOf(1, 2).asFlow().asPublisher()))
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
 
-            receivedMessages().take(3).toList()
+            receivedMessages().take(4).toList()
 
-            assertThat(onNextValues, equalTo(listOf(Next("subscribe-1", 1), Next("subscribe-1", 2))))
+            val messageSentEvents = events.filterIsInstance<GraphQLWsEvent.MessageSent>()
+
+            assertThat(messageSentEvents, equalTo(listOf(
+                GraphQLWsEvent.MessageSent(ConnectionAck(payload = null)),
+                GraphQLWsEvent.MessageSent(Next("subscribe-1", 1)),
+                GraphQLWsEvent.MessageSent(Next("subscribe-1", 2)),
+                GraphQLWsEvent.MessageSent(Complete("subscribe-1"))
+            )))
         }
     }
 
     @Test
-    fun `onComplete is called when each complete message is sent`(approver: Approver) {
-        val onCompleteValues = mutableListOf<Complete>()
-        GraphQLWsServer(onComplete = { onCompleteValues += it }) {
-            completedFuture(FakeExecutionResult(data = listOf(1).asFlow().asPublisher()))
+    fun `onEvent is called when each message is received`(approver: Approver) {
+        val events = mutableListOf<GraphQLWsEvent>()
+        GraphQLWsServer(onEvent = { events += it }) {
+            completedFuture(FakeExecutionResult(data = listOf(1, 2).asFlow().asPublisher()))
         }.withTestClient {
             sendConnectionInit()
+            send { obj("type" to string("ping")) }
             sendSubscribe("subscribe-1")
-            sendSubscribe("subscribe-2")
 
             receivedMessages().take(5).toList()
 
-            assertThat(onCompleteValues, equalTo(listOf(Complete("subscribe-1"), Complete("subscribe-2"))))
+            val messageSentEvents = events.filterIsInstance<GraphQLWsEvent.MessageReceived>()
+
+            assertThat(messageSentEvents, equalTo(listOf(
+                GraphQLWsEvent.MessageReceived(ConnectionInit(payload = null)),
+                GraphQLWsEvent.MessageReceived(Ping(payload = null)),
+                GraphQLWsEvent.MessageReceived(Subscribe("subscribe-1", GraphQLRequest("test query")))
+            )))
+        }
+    }
+
+    @Test
+    fun `onEvent is called when the socket is closed`() {
+        val events = mutableListOf<GraphQLWsEvent>()
+        GraphQLWsServer(onEvent = { events += it }, onSubscribe = emptyResult).withTestClient {
+            close(WsStatus.GOING_AWAY)
+
+            assertThat(events, allElements(
+                isA(has(GraphQLWsEvent.Closed::status, hasStatus(1001, "Going away")))
+            ))
         }
     }
 
