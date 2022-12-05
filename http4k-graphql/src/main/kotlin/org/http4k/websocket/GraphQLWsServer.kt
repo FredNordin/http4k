@@ -21,10 +21,10 @@ import java.util.concurrent.ScheduledExecutorService
 
 class GraphQLWsServer(
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3),
-    private val onConnect: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
-    private val onPing: Request.(Ping) -> Pong = { Pong(payload = null) },
+    private val connectionHandler: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
+    private val pingHandler: Request.(Ping) -> Pong = { Pong(payload = null) },
     onEvent: Request.(GraphQLWsEvent) -> Unit = {},
-    private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>
+    private val subscribeHandler: Request.(Subscribe) -> CompletionStage<ExecutionResult>
 ) : GraphQLWsProtocolHandler<GraphQLWsServer.Session, JsonNode>(Jackson), AutoCloseable {
 
     init {
@@ -40,9 +40,9 @@ class GraphQLWsServer(
             send,
             emitEvent,
             connectionInitWaitTimeout,
-            onConnect,
-            onPing,
-            onSubscribe
+            connectionHandler,
+            pingHandler,
+            subscribeHandler
         )
 
     override fun Throwable.toStatus(): WsStatus =
@@ -57,9 +57,9 @@ class GraphQLWsServer(
         send: (GraphQLWsMessage) -> Unit,
         emitEvent: Request.(GraphQLWsEvent) -> Unit,
         connectionInitWaitTimeout: Duration,
-        private val onConnect: Request.(ConnectionInit) -> ConnectionAck?,
-        private val onPing: Request.(Ping) -> Pong,
-        private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>
+        private val connectHandler: Request.(ConnectionInit) -> ConnectionAck?,
+        private val pingHandler: Request.(Ping) -> Pong,
+        private val subscribeHandler: Request.(Subscribe) -> CompletionStage<ExecutionResult>
     ) : GraphQLWsSession(ws, executor, send, emitEvent) {
 
         private val connectionInitTimeoutCheck = { close(connectionInitTimeoutStatus) }.scheduleAfter(connectionInitWaitTimeout)
@@ -67,7 +67,7 @@ class GraphQLWsServer(
         override fun handle(message: GraphQLWsMessage) {
             when (message) {
                 is ConnectionInit -> {
-                    onConnect(originalRequest, message)
+                    connectHandler(originalRequest, message)
                         ?.let { connectionAck ->
                             if (markAsConnected()) {
                                 connectionInitTimeoutCheck.cancel(false)
@@ -79,14 +79,14 @@ class GraphQLWsServer(
                         ?: close(forbiddenStatus)
                 }
 
-                is Ping -> send(onPing(originalRequest, message))
+                is Ping -> send(pingHandler(originalRequest, message))
 
                 is Subscribe -> {
                     if (connected) {
                         val id = message.id
 
                         newSubscription(id, onExists = { close(subscriberAlreadyExistsStatus(it)) }) { subscriber ->
-                            onSubscribe(originalRequest, message).handle { result, exception: Throwable? ->
+                            subscribeHandler(originalRequest, message).handle { result, exception: Throwable? ->
                                 if (exception != null) {
                                     sendError(id, exception)
                                 } else {

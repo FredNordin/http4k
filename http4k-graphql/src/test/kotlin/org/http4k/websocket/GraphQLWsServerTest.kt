@@ -56,16 +56,16 @@ import java.util.concurrent.TimeUnit
 class GraphQLWsServerTest {
 
     @Test
-    fun `on connection_init a connection_ack message is sent with result from onConnectionInit`(approver: Approver) =
-        GraphQLWsServer(onConnect = { ConnectionAck(it.payload) }, onSubscribe = emptyResult).withTestClient {
+    fun `on connection_init a connection_ack message is sent with result from connection handler`(approver: Approver) =
+        GraphQLWsServer(connectionHandler = { ConnectionAck(it.payload) }, subscribeHandler = emptyResult).withTestClient {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
             approver.assertApproved(receivedMessages().take(1).toList())
         }
 
     @Test
-    fun `on connection_init the socket is closed when onConnectionInit returns null`() =
-        GraphQLWsServer(onConnect = { null }, onSubscribe = emptyResult).withTestClient {
+    fun `on connection_init the socket is closed when connection handler returns null`() =
+        GraphQLWsServer(connectionHandler = { null }, subscribeHandler = emptyResult).withTestClient {
             sendConnectionInit(payload = { obj("some" to string("value")) })
 
             assertThat({ receivedMessages().take(1).toList() },
@@ -74,14 +74,14 @@ class GraphQLWsServerTest {
 
     @Test
     fun `when connection_init is not sent withing timeout the socket is closed`() =
-        GraphQLWsServer(connectionInitWaitTimeout = Duration.ofMillis(1), onSubscribe = emptyResult).withTestClient {
+        GraphQLWsServer(connectionInitWaitTimeout = Duration.ofMillis(1), subscribeHandler = emptyResult).withTestClient {
             assertThat({ receivedMessages().take(1).toList() },
                 throws(closedWebsocketWithStatus(4408, "Connection initialisation timeout")))
         }
 
     @Test
     fun `on multiple connection_init the socket is closed`() =
-        GraphQLWsServer(onSubscribe = emptyResult).withTestClient {
+        GraphQLWsServer(subscribeHandler = emptyResult).withTestClient {
             sendConnectionInit()
             sendConnectionInit()
 
@@ -90,8 +90,8 @@ class GraphQLWsServerTest {
         }
 
     @Test
-    fun `on ping a pong message is sent with result from onPing`(approver: Approver) =
-        GraphQLWsServer(onPing = { Pong(it.payload) }, onSubscribe = emptyResult).withTestClient {
+    fun `on ping a pong message is sent with result from ping handler`(approver: Approver) =
+        GraphQLWsServer(pingHandler = { Pong(it.payload) }, subscribeHandler = emptyResult).withTestClient {
             sendConnectionInit()
             send { obj("type" to string("ping"), "payload" to obj("some" to string("value"))) }
 
@@ -127,7 +127,7 @@ class GraphQLWsServerTest {
 
     @Test
     fun `on subscribe without connection_init the socket is closed`() {
-        GraphQLWsServer(onSubscribe = emptyResult).withTestClient {
+        GraphQLWsServer(subscribeHandler = emptyResult).withTestClient {
             sendSubscribe("subscribe-1")
 
             assertThat({ receivedMessages().take(1).toList() },
@@ -312,7 +312,7 @@ class GraphQLWsServerTest {
 
     @Test
     fun `on invalid message type the socket is closed`() {
-        GraphQLWsServer(onSubscribe = emptyResult).withTestClient {
+        GraphQLWsServer(subscribeHandler = emptyResult).withTestClient {
             send { obj("type" to string("unknown")) }
 
             assertThat({ receivedMessages().take(1).toList() },
@@ -322,7 +322,7 @@ class GraphQLWsServerTest {
 
     @Test
     fun `on connection_ack or next or error or pong the messages are ignored`(approver: Approver) {
-        GraphQLWsServer(onSubscribe = emptyResult).withTestClient {
+        GraphQLWsServer(subscribeHandler = emptyResult).withTestClient {
             sendConnectionInit()
             send { obj("type" to string("connection_ack")) }
             send { obj("type" to string("next"), "id" to string("anId")) }
@@ -380,7 +380,7 @@ class GraphQLWsServerTest {
     @Test
     fun `onEvent is called when the socket is closed`() {
         val events = mutableListOf<GraphQLWsEvent>()
-        GraphQLWsServer(onEvent = { events += it }, onSubscribe = emptyResult).withTestClient {
+        GraphQLWsServer(onEvent = { events += it }, subscribeHandler = emptyResult).withTestClient {
             close(WsStatus.GOING_AWAY)
 
             assertThat(events, allElements(
