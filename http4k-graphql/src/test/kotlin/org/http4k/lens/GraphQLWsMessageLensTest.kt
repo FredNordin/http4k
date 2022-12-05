@@ -56,7 +56,7 @@ class GraphQLWsMessageLensTest {
     @Test
     fun `fails creation when type is missing`() {
         assertThat(
-            { lens(body { obj("not-type" to string("garbage")) }) },
+            { lens(body { obj("not-type" to string("connection_init")) }) },
             throws(
                 has(
                     LensFailure::failures,

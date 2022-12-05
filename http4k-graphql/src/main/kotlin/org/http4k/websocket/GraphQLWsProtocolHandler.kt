@@ -5,6 +5,7 @@ import graphql.GraphqlErrorException
 import org.http4k.core.Body
 import org.http4k.core.Request
 import org.http4k.format.AutoMarshalling
+import org.http4k.format.AutoMarshallingJson
 import org.http4k.graphql.ws.GraphQLWsMessage
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
 import org.http4k.graphql.ws.GraphQLWsMessage.Error
@@ -20,7 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import org.reactivestreams.Subscriber as ReactiveSubscriber
 import org.reactivestreams.Subscription as ReactiveSubscription
 
-abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession>(json: AutoMarshalling) : WsConsumer, AutoCloseable {
+abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession, NODE : Any>(json: AutoMarshallingJson<NODE>) : WsConsumer, AutoCloseable {
 
     private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()

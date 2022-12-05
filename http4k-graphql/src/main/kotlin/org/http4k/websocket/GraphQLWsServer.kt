@@ -1,5 +1,6 @@
 package org.http4k.websocket
 
+import com.fasterxml.jackson.databind.JsonNode
 import graphql.ExecutionResult
 import graphql.GraphQLError
 import org.http4k.core.Request
@@ -26,7 +27,7 @@ class GraphQLWsServer(
     private val onError: Request.(Error, List<GraphQLError>) -> Unit = { _, _ -> },
     onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>
-) : GraphQLWsProtocolHandler<GraphQLWsServer.Session>(Jackson), AutoCloseable {
+) : GraphQLWsProtocolHandler<GraphQLWsServer.Session, JsonNode>(Jackson), AutoCloseable {
 
     init {
         onEvent(onEvent)
