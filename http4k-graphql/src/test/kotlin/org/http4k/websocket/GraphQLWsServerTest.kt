@@ -29,14 +29,6 @@ import org.http4k.core.Status
 import org.http4k.core.with
 import org.http4k.format.Jackson
 import org.http4k.graphql.GraphQLRequest
-import org.http4k.graphql.ws.GraphQLWsMessage
-import org.http4k.lens.Header
-import org.http4k.routing.websockets
-import org.http4k.testing.Approver
-import org.http4k.testing.ClosedWebsocket
-import org.http4k.testing.JsonApprovalTest
-import org.http4k.testing.TestWsClient
-import org.http4k.testing.testWsClient
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionInit
@@ -44,6 +36,13 @@ import org.http4k.graphql.ws.GraphQLWsMessage.Next
 import org.http4k.graphql.ws.GraphQLWsMessage.Ping
 import org.http4k.graphql.ws.GraphQLWsMessage.Pong
 import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
+import org.http4k.lens.Header
+import org.http4k.routing.websockets
+import org.http4k.testing.Approver
+import org.http4k.testing.ClosedWebsocket
+import org.http4k.testing.JsonApprovalTest
+import org.http4k.testing.TestWsClient
+import org.http4k.testing.testWsClient
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
@@ -331,25 +330,6 @@ class GraphQLWsServerTest {
             send { obj("type" to string("pong")) }
 
             approver.assertApproved(receivedMessages().take(2).toList())
-        }
-    }
-
-    @Test
-    fun `onError is called when there is a GQL error`() {
-        var onErrorList: List<GraphQLError>? = null
-        val onError: Request.(GraphQLWsMessage.Error, List<GraphQLError>) -> Unit =
-            { error, graphQLErrors -> onErrorList = graphQLErrors.takeIf { error.id == "subscribe-1" } }
-        GraphQLWsServer(onError = onError) {
-            val data = listOf { throw IllegalStateException("Boom!") }
-                .asFlow().map { it() }.asPublisher()
-            completedFuture(FakeExecutionResult(data = data))
-        }.withTestClient {
-            sendConnectionInit()
-            sendSubscribe("subscribe-1")
-
-            receivedMessages().take(2).toList()
-
-            assertThat(onErrorList, present(allElements(has(GraphQLError::getMessage, equalTo("Boom!")))))
         }
     }
 

@@ -2,7 +2,6 @@ package org.http4k.websocket
 
 import com.fasterxml.jackson.databind.JsonNode
 import graphql.ExecutionResult
-import graphql.GraphQLError
 import org.http4k.core.Request
 import org.http4k.format.Jackson
 import org.http4k.graphql.ws.GraphQLWsMessage
@@ -24,7 +23,6 @@ class GraphQLWsServer(
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3),
     private val onConnect: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val onPing: Request.(Ping) -> Pong = { Pong(payload = null) },
-    private val onError: Request.(Error, List<GraphQLError>) -> Unit = { _, _ -> },
     onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>
 ) : GraphQLWsProtocolHandler<GraphQLWsServer.Session, JsonNode>(Jackson), AutoCloseable {
@@ -44,8 +42,7 @@ class GraphQLWsServer(
             connectionInitWaitTimeout,
             onConnect,
             onPing,
-            onSubscribe,
-            onError
+            onSubscribe
         )
 
     override fun Throwable.toStatus(): WsStatus =
@@ -62,15 +59,10 @@ class GraphQLWsServer(
         connectionInitWaitTimeout: Duration,
         private val onConnect: Request.(ConnectionInit) -> ConnectionAck?,
         private val onPing: Request.(Ping) -> Pong,
-        private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>,
-        onError: Request.(Error, List<GraphQLError>) -> Unit
+        private val onSubscribe: Request.(Subscribe) -> CompletionStage<ExecutionResult>
     ) : GraphQLWsSession(ws, executor, send, emitEvent) {
 
         private val connectionInitTimeoutCheck = { close(connectionInitTimeoutStatus) }.scheduleAfter(connectionInitWaitTimeout)
-
-        init {
-            onError(onError)
-        }
 
         override fun handle(message: GraphQLWsMessage) {
             when (message) {

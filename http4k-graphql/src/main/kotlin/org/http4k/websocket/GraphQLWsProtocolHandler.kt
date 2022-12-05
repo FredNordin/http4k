@@ -4,7 +4,6 @@ import graphql.GraphQLError
 import graphql.GraphqlErrorException
 import org.http4k.core.Body
 import org.http4k.core.Request
-import org.http4k.format.AutoMarshalling
 import org.http4k.format.AutoMarshallingJson
 import org.http4k.graphql.ws.GraphQLWsMessage
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
@@ -72,7 +71,6 @@ abstract class GraphQLWsSession(private val ws: Websocket, private val executor:
                                 private val emitEvent: Request.(GraphQLWsEvent) -> Unit) {
     private val connectedState = AtomicBoolean(false)
     private val onCloseHandlers = mutableListOf<Request.(WsStatus) -> Unit>()
-    private val onErrorHandlers = mutableListOf<Request.(Error, List<GraphQLError>) -> Unit>()
     private val subscriptions = ConcurrentHashMap<String, Subscription>().also {
         it.forEach { ( _, subscription) ->
             subscription.cancel()
@@ -117,7 +115,6 @@ abstract class GraphQLWsSession(private val ws: Websocket, private val executor:
     fun sendError(id: String, errors: List<GraphQLError>) {
         subscriptions.remove(id)
         val error = Error(id, errors.map { it.toSpecification() })
-        onErrorHandlers.forEach { it(originalRequest, error, errors) }
         send(error)
     }
 
@@ -125,10 +122,6 @@ abstract class GraphQLWsSession(private val ws: Websocket, private val executor:
         onCloseHandlers.forEach { it(originalRequest, status) }
         ws.close(status)
         emitEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
-    }
-
-    fun onError(fn: Request.(Error, List<GraphQLError>) -> Unit) {
-        onErrorHandlers.add(fn)
     }
 
     fun (() -> Unit).scheduleAfter(duration: Duration): ScheduledFuture<*> =
