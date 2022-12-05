@@ -25,20 +25,16 @@ class GraphQLWsServer(
     private val pingHandler: Request.(Ping) -> Pong = { Pong(payload = null) },
     onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val subscribeHandler: Request.(Subscribe) -> CompletionStage<ExecutionResult>
-) : GraphQLWsProtocolHandler<GraphQLWsServer.Session, JsonNode>(Jackson), AutoCloseable {
-
-    init {
-        onEvent(onEvent)
-    }
+) : GraphQLWsProtocolHandler<GraphQLWsServer.Session, JsonNode>(Jackson, onEvent), AutoCloseable {
 
     override fun Websocket.createSession(executor: ScheduledExecutorService,
                                          send: (GraphQLWsMessage) -> Unit,
-                                         emitEvent: Request.(GraphQLWsEvent) -> Unit): Session =
+                                         onEvent: Request.(GraphQLWsEvent) -> Unit): Session =
         Session(
             this,
             executor,
             send,
-            emitEvent,
+            onEvent,
             connectionInitWaitTimeout,
             connectionHandler,
             pingHandler,
@@ -55,12 +51,12 @@ class GraphQLWsServer(
         ws: Websocket,
         executor: ScheduledExecutorService,
         send: (GraphQLWsMessage) -> Unit,
-        emitEvent: Request.(GraphQLWsEvent) -> Unit,
+        onEvent: Request.(GraphQLWsEvent) -> Unit,
         connectionInitWaitTimeout: Duration,
         private val connectHandler: Request.(ConnectionInit) -> ConnectionAck?,
         private val pingHandler: Request.(Ping) -> Pong,
         private val subscribeHandler: Request.(Subscribe) -> CompletionStage<ExecutionResult>
-    ) : GraphQLWsSession(ws, executor, send, emitEvent) {
+    ) : GraphQLWsSession(ws, executor, send, onEvent) {
 
         private val connectionInitTimeoutCheck = { close(connectionInitTimeoutStatus) }.scheduleAfter(connectionInitWaitTimeout)
 

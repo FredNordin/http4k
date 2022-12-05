@@ -20,23 +20,21 @@ import java.util.concurrent.atomic.AtomicBoolean
 import org.reactivestreams.Subscriber as ReactiveSubscriber
 import org.reactivestreams.Subscription as ReactiveSubscription
 
-abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession, NODE : Any>(json: AutoMarshallingJson<NODE>) : WsConsumer, AutoCloseable {
+abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession, NODE : Any>(
+    json: AutoMarshallingJson<NODE>,
+    private val onEvent: Request.(GraphQLWsEvent) -> Unit
+) : WsConsumer, AutoCloseable {
 
     private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
-    private val onEventHandlers = mutableListOf<Request.(GraphQLWsEvent) -> Unit>()
-
-    private val emitEvent: Request.(GraphQLWsEvent) -> Unit = { event ->
-        onEventHandlers.forEach { it(this, event) }
-    }
 
     override fun invoke(ws: Websocket) {
-        val session = ws.createSession(executor, send = { ws.send(it) }, emitEvent)
+        val session = ws.createSession(executor, send = { ws.send(it) }, onEvent)
 
         ws.onMessage { wsMessage ->
             runCatching {
                 val message = graphqlWsMessageBody(wsMessage.body)
-                emitEvent(ws.upgradeRequest, GraphQLWsEvent.MessageReceived(message))
+                onEvent(ws.upgradeRequest, GraphQLWsEvent.MessageReceived(message))
                 session.handle(message)
             }.onFailure {
                 session.close(it.toStatus())
@@ -48,13 +46,9 @@ abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession, NODE : Any>(json: 
 
     protected abstract fun Websocket.createSession(executor: ScheduledExecutorService,
                                                    send: (GraphQLWsMessage) -> Unit,
-                                                   emitEvent: Request.(GraphQLWsEvent) -> Unit): S
+                                                   onEvent: Request.(GraphQLWsEvent) -> Unit): S
 
     protected abstract fun Throwable.toStatus(): WsStatus
-
-    protected fun onEvent(fn: Request.(GraphQLWsEvent) -> Unit) {
-        onEventHandlers.add(fn)
-    }
 
     override fun close() {
         executor.shutdown()
@@ -62,13 +56,13 @@ abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession, NODE : Any>(json: 
 
     private fun Websocket.send(message: GraphQLWsMessage) {
         send(WsMessage(graphqlWsMessageBody(message, Body.EMPTY)))
-        emitEvent(upgradeRequest, GraphQLWsEvent.MessageSent(message))
+        onEvent(upgradeRequest, GraphQLWsEvent.MessageSent(message))
     }
 }
 
 abstract class GraphQLWsSession(private val ws: Websocket, private val executor: ScheduledExecutorService,
                                 val send: (GraphQLWsMessage) -> Unit,
-                                private val emitEvent: Request.(GraphQLWsEvent) -> Unit) {
+                                private val onEvent: Request.(GraphQLWsEvent) -> Unit) {
     private val connectedState = AtomicBoolean(false)
     private val onCloseHandlers = mutableListOf<Request.(WsStatus) -> Unit>()
     private val subscriptions = ConcurrentHashMap<String, Subscription>().also {
@@ -121,7 +115,7 @@ abstract class GraphQLWsSession(private val ws: Websocket, private val executor:
     fun close(status: WsStatus) {
         onCloseHandlers.forEach { it(originalRequest, status) }
         ws.close(status)
-        emitEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
+        onEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
     }
 
     fun (() -> Unit).scheduleAfter(duration: Duration): ScheduledFuture<*> =
