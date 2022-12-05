@@ -2,6 +2,7 @@ package org.http4k.websocket
 
 import graphql.GraphQLError
 import graphql.GraphqlErrorException
+import org.http4k.core.Body
 import org.http4k.core.Request
 import org.http4k.format.AutoMarshalling
 import org.http4k.graphql.ws.GraphQLWsMessage
@@ -19,9 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import org.reactivestreams.Subscriber as ReactiveSubscriber
 import org.reactivestreams.Subscription as ReactiveSubscription
 
-abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession>(
-    private val json: AutoMarshalling
-) : WsConsumer, AutoCloseable {
+abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession>(json: AutoMarshalling) : WsConsumer, AutoCloseable {
 
     private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
@@ -36,7 +35,7 @@ abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession>(
 
         ws.onMessage { wsMessage ->
             runCatching {
-                val message = graphqlWsMessageBody(wsMessage)
+                val message = graphqlWsMessageBody(wsMessage.body)
                 emitEvent(ws.upgradeRequest, GraphQLWsEvent.MessageReceived(message))
                 session.handle(message)
             }.onFailure {
@@ -62,7 +61,7 @@ abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession>(
     }
 
     private fun Websocket.send(message: GraphQLWsMessage) {
-        send(WsMessage(json.asFormatString(message)))
+        send(WsMessage(graphqlWsMessageBody(message, Body.EMPTY)))
         emitEvent(upgradeRequest, GraphQLWsEvent.MessageSent(message))
     }
 }
