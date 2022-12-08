@@ -67,8 +67,8 @@ class GraphQLWsClient(
                     }
                 }.onFailure {
                     when (it) {
-                        is CloseWsException -> ws.close(it.status)
-                        is LensFailure -> error("Implement lens failure (parsing) handling") // TODO
+                        is SubscriptionAlreadyExistsException -> ws.close(subscriberAlreadyExistsStatus(it.id))
+                        is LensFailure -> ws.close(badRequestStatus(it))
                         else -> error("Implement failure handling - downstream error: ${it.message}") // TODO
                     }
                 }
@@ -128,7 +128,7 @@ class GraphQLWsClient(
             if (subscriptions.putIfAbsent(id, publisher) == null) {
                 return publisher
             } else {
-                throw CloseWsException(subscriberAlreadyExistsStatus(id))
+                throw SubscriptionAlreadyExistsException(id)
             }
         }
 
@@ -191,9 +191,10 @@ class GraphQLWsClient(
         }
     }
 
-    private class CloseWsException(val status: WsStatus) : RuntimeException()
+    private class SubscriptionAlreadyExistsException(val id: String) : RuntimeException()
 
     companion object {
+        private fun badRequestStatus(e: LensFailure) = WsStatus(4400, e.localizedMessage)
         private val connectionInitTimeoutStatus = WsStatus(4408, "Connection initialisation timeout")
         private fun subscriberAlreadyExistsStatus(id: String) = WsStatus(4409, "Subscriber for '$id' already exists")
     }

@@ -1,7 +1,7 @@
 package org.http4k.websocket
 
-import com.natpryce.hamkrest.Matcher
 import com.natpryce.hamkrest.and
+import com.natpryce.hamkrest.anyElement
 import com.natpryce.hamkrest.assertion.assertThat
 import com.natpryce.hamkrest.equalTo
 import com.natpryce.hamkrest.has
@@ -30,7 +30,6 @@ import org.http4k.websocket.GraphQLWsEvent.MessageReceived
 import org.http4k.websocket.GraphQLWsEvent.MessageSent
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
-import org.junit.jupiter.api.fail
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import java.time.Duration
@@ -48,10 +47,10 @@ class GraphQLWsClientTest {
         GraphQLWsClient(onEvent = { events.add(it) }){}.withFakeServer { server ->
             server.awaitConnected()
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(ConnectionInit(payload = null))
-            ))
+            )
         }
     }
 
@@ -59,10 +58,10 @@ class GraphQLWsClientTest {
     fun `when socket is closed during connection a closed event is emitted`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(onEvent = { events.add(it) }) {}.withFakeServer(allowConnection = false) {
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 Closed(WsStatus(4403, "Forbidden"))
-            ))
+            )
         }
     }
 
@@ -71,10 +70,9 @@ class GraphQLWsClientTest {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(connectionAckWaitTimeout = Duration.ofMillis(10), onEvent = { events.add(it) }) {}
             .withFakeServer(sendConnectionAck = false) {
-                assertThat(events, hasItems(
-                        MessageSent(ConnectionInit(payload = null)),
-                        Closed(WsStatus(4408, "Connection initialisation timeout"))
-                    )
+                events.mustHaveItems(
+                    MessageSent(ConnectionInit(payload = null)),
+                    Closed(WsStatus(4408, "Connection initialisation timeout"))
                 )
             }
     }
@@ -86,12 +84,12 @@ class GraphQLWsClientTest {
             server.awaitConnected()
             server.send(Ping(payload = mapOf("some" to "value")))
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageSent(Pong(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageReceived(Ping(payload = mapOf("some" to "value")))
-            ))
+            )
         }
     }
 
@@ -105,12 +103,12 @@ class GraphQLWsClientTest {
             server.awaitConnected()
             server.send(Ping(payload = mapOf("server" to "value")))
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageSent(Pong(payload = mapOf("client" to "value", "server" to "value"))),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageReceived(Ping(payload = mapOf("server" to "value")))
-            ))
+            )
         }
     }
 
@@ -127,9 +125,9 @@ class GraphQLWsClientTest {
             server.sendNext()
             server.sendComplete()
 
-            assertThat(subscriber.values, hasItems("1", "2", "3"))
+            subscriber.values.mustHaveItems("1", "2", "3")
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
@@ -137,7 +135,7 @@ class GraphQLWsClientTest {
                 MessageReceived(Next("sub-1", "2")),
                 MessageReceived(Next("sub-1", "3")),
                 MessageReceived(Complete("sub-1"))
-            ))
+            )
         }
     }
 
@@ -154,15 +152,15 @@ class GraphQLWsClientTest {
             server.sendNext()
             server.sendComplete()
 
-            assertThat(subscriber.values, hasItems("1"))
+            subscriber.values.mustHaveItems("1")
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
                 MessageReceived(Next("sub-1", "1")),
                 MessageSent(Complete("sub-1"))
-            ))
+            )
         }
     }
 
@@ -181,9 +179,9 @@ class GraphQLWsClientTest {
             server.sendComplete("sub-3")
             server.sendComplete()
 
-            assertThat(subscriber.values, hasItems("1"))
+            subscriber.values.mustHaveItems("1")
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
@@ -193,7 +191,7 @@ class GraphQLWsClientTest {
                 MessageReceived(Complete("sub-1")),
                 MessageReceived(Complete("sub-2")),
                 MessageReceived(Complete("sub-3"))
-            ))
+            )
         }
     }
 
@@ -210,12 +208,12 @@ class GraphQLWsClientTest {
 
             assertThat(error, present(isA(has(GraphQLException::message, equalTo("[{message=boom}]")))))
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
                 MessageReceived(Error("sub-1", listOf(mapOf("message" to "boom"))))
-            ))
+            )
         }
     }
 
@@ -228,12 +226,12 @@ class GraphQLWsClientTest {
         }.withFakeServer { server ->
             server.awaitConnected()
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
                 Closed(WsStatus(4409, "Subscriber for 'sub-1' already exists"))
-            ))
+            )
         }
     }
 
@@ -245,12 +243,12 @@ class GraphQLWsClientTest {
         }.withFakeServer(subscriptionAlreadyExists = true) { server ->
             server.awaitConnected()
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
                 Closed(WsStatus(4409, "Subscriber for 'sub-1' already exists"))
-            ))
+            )
         }
     }
 
@@ -264,12 +262,12 @@ class GraphQLWsClientTest {
             server.awaitConnected()
             server.sendNext()
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
                 Closed(WsStatus.NORMAL)
-            ))
+            )
         }
     }
 
@@ -286,7 +284,7 @@ class GraphQLWsClientTest {
             server.send(Pong(payload = mapOf("some" to "value")))
             server.sendComplete()
 
-            assertThat(events, hasItems(
+            events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
                 MessageReceived(ConnectionAck(payload = null)),
@@ -295,7 +293,22 @@ class GraphQLWsClientTest {
                 MessageReceived(ConnectionInit(payload = mapOf("some" to "value"))),
                 MessageReceived(Subscribe("some_id", GraphQLRequest("some query"))),
                 MessageReceived(Pong(payload = mapOf("some" to "value")))
-            ))
+            )
+        }
+    }
+
+    @Test
+    fun `on invalid message returned from server the socket is closed`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(onEvent = { events.add(it) }) {}.withFakeServer { server ->
+            server.awaitConnected()
+            server.sendInvalidMessage()
+
+            events.mustHaveItems(
+                MessageSent(ConnectionInit(payload = null)),
+                MessageReceived(ConnectionAck(payload = null)),
+                Closed(WsStatus(4400, "graphql-ws message field 'type' is required"))
+            )
         }
     }
 
@@ -311,14 +324,20 @@ class GraphQLWsClientTest {
             block(fakeServer)
         }
 
-        private fun <T> hasItems(vararg expectedItems: T): Matcher<LinkedBlockingQueue<T>> =
-            has("items", {
-                generateSequence {
-                    it.poll(50, TimeUnit.MILLISECONDS)
-                }.take(expectedItems.size).toList()
-            }, expectedItems.fold(hasSize(equalTo(expectedItems.size))) { acc, item ->
-                acc and hasElement(item)
-            })
+        private fun <T> LinkedBlockingQueue<T>.mustHaveItems(vararg expectedItems: T) {
+            val actualItems = generateSequence { poll(50, TimeUnit.MILLISECONDS) }
+                .take(expectedItems.size).toList()
+            expectedItems.forEach { expectedItem ->
+                when (expectedItem) {
+                    is Closed -> assertThat(actualItems, anyElement(isA(has(Closed::status,
+                        has(WsStatus::code, equalTo(expectedItem.status.code)) and
+                            has(WsStatus::description, equalTo(expectedItem.status.description))
+                    ))))
+                    else -> assertThat(actualItems, hasElement(expectedItem))
+                }
+            }
+            assertThat(actualItems, hasSize(equalTo(expectedItems.size)))
+        }
     }
 }
 
@@ -343,6 +362,8 @@ private class FakeServer(
         send(Error(subId, listOf(mapOf("message" to "boom"))))
 
     fun send(message: GraphQLWsMessage) = triggerMessage(message)
+
+    fun sendInvalidMessage() = triggerMessage(WsMessage("{}"))
 
     override fun send(message: WsMessage) {
         when (val graphQLWsMessage = messageLens(message.body)) {
