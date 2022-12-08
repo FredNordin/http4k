@@ -37,6 +37,7 @@ interface GraphQLWsConnection {
 
 class GraphQLWsClient(
     private val connectionAckWaitTimeout: Duration = Duration.ofSeconds(3),
+    private val connectionHandler: Request.() -> ConnectionInit = { ConnectionInit(payload = null) },
     private val pingHandler: (Ping) -> Pong = { Pong(payload = null) },
     private val onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val onConnected: (GraphQLWsConnection) -> Unit
@@ -48,7 +49,7 @@ class GraphQLWsClient(
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
     override fun invoke(ws: Websocket) {
-        val connection = ClientConnection(ws, connectionAckWaitTimeout, onConnected)
+        val connection = ClientConnection(ws, connectionAckWaitTimeout, connectionHandler, onConnected)
 
         ws.onMessage { wsMessage ->
             wsMessage
@@ -100,6 +101,7 @@ class GraphQLWsClient(
     private inner class ClientConnection(
         private val ws: Websocket,
         private val connectionAckWaitTimeout: Duration,
+        private val connectionHandler: Request.() -> ConnectionInit,
         private val onConnected: (GraphQLWsConnection) -> Unit
     ) : GraphQLWsConnection {
 
@@ -113,7 +115,7 @@ class GraphQLWsClient(
         private val connectionAckTimeoutCheck = FutureTask { ws.close(connectionInitTimeoutStatus) }
 
         fun start() {
-            ws.send(ConnectionInit(payload = null))
+            ws.send(connectionHandler(ws.upgradeRequest))
 
             executor.schedule(connectionAckTimeoutCheck, connectionAckWaitTimeout.toMillis(), TimeUnit.MILLISECONDS)
             onCloseHandlers.add {

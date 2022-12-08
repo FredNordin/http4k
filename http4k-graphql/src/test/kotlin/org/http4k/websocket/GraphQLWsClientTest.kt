@@ -13,6 +13,7 @@ import graphql.GraphQLException
 import org.http4k.core.Body
 import org.http4k.core.Method
 import org.http4k.core.Request
+import org.http4k.core.Uri
 import org.http4k.format.Jackson
 import org.http4k.graphql.GraphQLRequest
 import org.http4k.graphql.ws.GraphQLWsMessage
@@ -48,8 +49,24 @@ class GraphQLWsClientTest {
             server.awaitConnected()
 
             events.mustHaveItems(
-                MessageReceived(ConnectionAck(payload = null)),
-                MessageSent(ConnectionInit(payload = null))
+                MessageSent(ConnectionInit(payload = null)),
+                MessageReceived(ConnectionAck(payload = null))
+            )
+        }
+    }
+
+    @Test
+    fun `sends connection_init with result of custom connectionHandler on ws connect`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(
+            connectionHandler = { ConnectionInit(payload = mapOf("method" to method, "uri" to uri)) },
+            onEvent = { events.add(it) }){
+        }.withFakeServer { server ->
+            server.awaitConnected()
+
+            events.mustHaveItems(
+                MessageSent(ConnectionInit(payload = mapOf("method" to Method.GET, "uri" to Uri.of("graphql-ws")))),
+                MessageReceived(ConnectionAck(payload = null))
             )
         }
     }
