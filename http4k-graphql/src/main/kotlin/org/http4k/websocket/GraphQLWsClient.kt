@@ -17,6 +17,7 @@ import org.http4k.graphql.ws.GraphQLWsMessage.Error
 import org.http4k.graphql.ws.GraphQLWsMessage.Next
 import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
 import org.http4k.lens.GraphQLWsMessageLens
+import org.http4k.lens.LensFailure
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
@@ -26,6 +27,7 @@ import java.util.concurrent.ScheduledExecutorService
 
 interface GraphQLWsConnection {
     fun newSubscription(id: String, request: GraphQLRequest): Publisher<Any>
+    fun disconnect()
 }
 
 class GraphQLWsClient(
@@ -51,11 +53,15 @@ class GraphQLWsClient(
                         is Next -> connection.onNext(message)
                         is Complete -> connection.onComplete(message)
                         is Error -> connection.onError(message)
-                        else -> error("Implement checks for other message types") // TODO
+                        is GraphQLWsMessage.Ping -> TODO()
+                        is GraphQLWsMessage.Pong -> TODO()
+                        is ConnectionInit -> {}
+                        is Subscribe -> {}
                     }
                 }.onFailure {
                     when (it) {
                         is CloseWsException -> ws.close(it.status)
+                        is LensFailure -> error("Implement lens failure (parsing) handling") // TODO
                         else -> error("Implement failure handling - downstream error: ${it.message}") // TODO
                     }
                 }
@@ -102,6 +108,10 @@ class GraphQLWsClient(
             } else {
                 throw CloseWsException(subscriberAlreadyExistsStatus(id))
             }
+        }
+
+        override fun disconnect() {
+            ws.close(WsStatus.NORMAL)
         }
 
         fun onConnected() {

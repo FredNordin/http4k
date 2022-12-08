@@ -176,13 +176,87 @@ class GraphQLWsClientTest {
         }
     }
 
+    @Test
+    fun `subscription with id existing on server results in socket being closed`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
+            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(TestSubscriber())
+        }.withFakeServer(subscriptionAlreadyExists = true) { server ->
+            server.awaitConnected()
+
+            assertThat(events, hasItems(
+                MessageSent(ConnectionInit(payload = null)),
+                MessageReceived(ConnectionAck(payload = null)),
+                MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
+                Closed(WsStatus(4409, "Subscriber for 'sub-1' already exists"))
+            ))
+        }
+    }
+
+    @Test
+    fun `when socket is closed during connection a closed event is emitted`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(onEvent = { events.add(it) }) {}.withFakeServer(allowConnection = false) {
+            assertThat(events, hasItems(
+                MessageSent(ConnectionInit(payload = null)),
+                Closed(WsStatus(4403, "Forbidden"))
+            ))
+        }
+    }
+
+    @Test
+    fun `disconnecting from connection results in socket being closed with normal status and no more subscription messages`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
+            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(TestSubscriber())
+            connection.disconnect()
+        }.withFakeServer { server ->
+            server.awaitConnected()
+            server.sendNext()
+
+            assertThat(events, hasItems(
+                MessageSent(ConnectionInit(payload = null)),
+                MessageReceived(ConnectionAck(payload = null)),
+                MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
+                Closed(WsStatus.NORMAL)
+            ))
+        }
+    }
+
+    @Test
+    fun `connection_init and subscribe messages should be ignored but visible in events`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
+            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(TestSubscriber())
+        }.withFakeServer { server ->
+            server.awaitConnected()
+            server.sendNext()
+            server.send(ConnectionInit(payload = mapOf("some" to "value")))
+            server.send(Subscribe("some_id", GraphQLRequest("some query")))
+            server.sendComplete()
+
+            assertThat(events, hasItems(
+                MessageSent(ConnectionInit(payload = null)),
+                MessageReceived(ConnectionAck(payload = null)),
+                MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
+                MessageReceived(Next("sub-1", "1")),
+                MessageReceived(Complete("sub-1")),
+                MessageReceived(ConnectionInit(payload = mapOf("some" to "value"))),
+                MessageReceived(Subscribe("some_id", GraphQLRequest("some query")))
+            ))
+        }
+    }
+
     companion object {
-        private fun GraphQLWsClient.withFakeServer(block: (FakeServer) -> Unit) =
-            use {
-                val fakeServer = FakeServer()
-                this(fakeServer)
-                block(fakeServer)
-            }
+        private fun GraphQLWsClient.withFakeServer(
+            allowConnection: Boolean = true,
+            subscriptionAlreadyExists: Boolean = false,
+            block: (FakeServer) -> Unit
+        ) = use {
+            val fakeServer = FakeServer(allowConnection, subscriptionAlreadyExists)
+            this(fakeServer)
+            block(fakeServer)
+        }
 
         private fun <T> hasItems(vararg expectedItems: T): Matcher<LinkedBlockingQueue<T>> =
             has("items", {
@@ -195,7 +269,10 @@ class GraphQLWsClientTest {
     }
 }
 
-private class FakeServer : PushPullAdaptingWebSocket(Request(Method.GET, "graphql-ws")) {
+private class FakeServer(
+    private val allowConnection: Boolean,
+    private val subscriptionAlreadyExists: Boolean
+) : PushPullAdaptingWebSocket(Request(Method.GET, "graphql-ws")) {
 
     private val connected = CountDownLatch(1)
     private val valueToSend = AtomicInteger(0)
@@ -203,21 +280,31 @@ private class FakeServer : PushPullAdaptingWebSocket(Request(Method.GET, "graphq
     fun awaitConnected() = assertThat("connected", connected.await(100, TimeUnit.MILLISECONDS), equalTo(true))
 
     fun sendNext(subId: String = "sub-1") =
-        triggerMessage(Next(subId, valueToSend.incrementAndGet().toString()))
+        send(Next(subId, valueToSend.incrementAndGet().toString()))
 
     fun sendComplete(subId: String = "sub-1") =
-        triggerMessage(Complete(subId))
+        send(Complete(subId))
 
     fun sendError(subId: String = "sub-1") =
-        triggerMessage(Error(subId, listOf(mapOf("message" to "boom"))))
+        send(Error(subId, listOf(mapOf("message" to "boom"))))
+
+    fun send(message: GraphQLWsMessage) = triggerMessage(message)
 
     override fun send(message: WsMessage) {
         when (val graphQLWsMessage = messageLens(message.body)) {
             is ConnectionInit -> {
-                connected.countDown()
-                triggerMessage(ConnectionAck(payload = null))
+                if (allowConnection) {
+                    connected.countDown()
+                    triggerMessage(ConnectionAck(payload = null))
+                } else {
+                    triggerClose(WsStatus(4403, "Forbidden"))
+                }
             }
-            is Subscribe -> {}
+            is Subscribe -> {
+                if (subscriptionAlreadyExists) {
+                    triggerClose(WsStatus(4409, "Subscriber for '${graphQLWsMessage.id}' already exists"))
+                }
+            }
             is Complete -> {}
             else -> fail("Unexpected message type '${graphQLWsMessage.type}'")
         }
