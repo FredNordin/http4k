@@ -15,15 +15,20 @@ import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionInit
 import org.http4k.graphql.ws.GraphQLWsMessage.Error
 import org.http4k.graphql.ws.GraphQLWsMessage.Next
+import org.http4k.graphql.ws.GraphQLWsMessage.Ping
+import org.http4k.graphql.ws.GraphQLWsMessage.Pong
 import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
 import org.http4k.lens.GraphQLWsMessageLens
 import org.http4k.lens.LensFailure
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 interface GraphQLWsConnection {
     fun newSubscription(id: String, request: GraphQLRequest): Publisher<Any>
@@ -31,6 +36,8 @@ interface GraphQLWsConnection {
 }
 
 class GraphQLWsClient(
+    private val connectionAckWaitTimeout: Duration = Duration.ofSeconds(3),
+    private val pingHandler: (Ping) -> Pong = { Pong(payload = null) },
     private val onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val onConnected: (GraphQLWsConnection) -> Unit
 ) : WsConsumer, AutoCloseable {
@@ -41,7 +48,7 @@ class GraphQLWsClient(
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
     override fun invoke(ws: Websocket) {
-        val connection = ClientConnection(ws, onConnected)
+        val connection = ClientConnection(ws, connectionAckWaitTimeout, onConnected)
 
         ws.onMessage { wsMessage ->
             wsMessage
@@ -53,8 +60,8 @@ class GraphQLWsClient(
                         is Next -> connection.onNext(message)
                         is Complete -> connection.onComplete(message)
                         is Error -> connection.onError(message)
-                        is GraphQLWsMessage.Ping -> TODO()
-                        is GraphQLWsMessage.Pong -> TODO()
+                        is Ping -> ws.send(pingHandler(message))
+                        is Pong -> {}
                         is ConnectionInit -> {}
                         is Subscribe -> {}
                     }
@@ -92,13 +99,28 @@ class GraphQLWsClient(
 
     private inner class ClientConnection(
         private val ws: Websocket,
+        private val connectionAckWaitTimeout: Duration,
         private val onConnected: (GraphQLWsConnection) -> Unit
     ) : GraphQLWsConnection {
 
         private val subscriptions = ConcurrentHashMap<String, SubscriptionPublisher>()
+        private val onCloseHandlers = mutableListOf({
+            subscriptions.forEach { ( _, subscription) ->
+                subscription.noMoreData()
+            }
+            subscriptions.clear()
+        })
+        private val connectionAckTimeoutCheck = FutureTask { ws.close(connectionInitTimeoutStatus) }
 
         fun start() {
             ws.send(ConnectionInit(payload = null))
+
+            executor.schedule(connectionAckTimeoutCheck, connectionAckWaitTimeout.toMillis(), TimeUnit.MILLISECONDS)
+            onCloseHandlers.add {
+                if (!connectionAckTimeoutCheck.isDone) {
+                    connectionAckTimeoutCheck.cancel(false)
+                }
+            }
         }
 
         override fun newSubscription(id: String, request: GraphQLRequest): Publisher<Any> {
@@ -131,10 +153,7 @@ class GraphQLWsClient(
         }
 
         fun onClose(status: WsStatus) {
-            subscriptions.forEach { ( _, subscription) ->
-                subscription.noMoreData()
-            }
-            subscriptions.clear()
+            onCloseHandlers.forEach { it() }
             onEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
         }
 
@@ -175,6 +194,7 @@ class GraphQLWsClient(
     private class CloseWsException(val status: WsStatus) : RuntimeException()
 
     companion object {
+        private val connectionInitTimeoutStatus = WsStatus(4408, "Connection initialisation timeout")
         private fun subscriberAlreadyExistsStatus(id: String) = WsStatus(4409, "Subscriber for '$id' already exists")
     }
 }

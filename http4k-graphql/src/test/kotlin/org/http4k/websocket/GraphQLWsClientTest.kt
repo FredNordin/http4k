@@ -21,6 +21,8 @@ import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionInit
 import org.http4k.graphql.ws.GraphQLWsMessage.Error
 import org.http4k.graphql.ws.GraphQLWsMessage.Next
+import org.http4k.graphql.ws.GraphQLWsMessage.Ping
+import org.http4k.graphql.ws.GraphQLWsMessage.Pong
 import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
 import org.http4k.lens.GraphQLWsMessageLens
 import org.http4k.websocket.GraphQLWsEvent.Closed
@@ -31,6 +33,7 @@ import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.fail
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
+import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -50,7 +53,65 @@ class GraphQLWsClientTest {
                 MessageSent(ConnectionInit(payload = null))
             ))
         }
+    }
 
+    @Test
+    fun `when socket is closed during connection a closed event is emitted`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(onEvent = { events.add(it) }) {}.withFakeServer(allowConnection = false) {
+            assertThat(events, hasItems(
+                MessageSent(ConnectionInit(payload = null)),
+                Closed(WsStatus(4403, "Forbidden"))
+            ))
+        }
+    }
+
+    @Test
+    fun `when connection_ack is not received within timout the socket is closed`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(connectionAckWaitTimeout = Duration.ofMillis(10), onEvent = { events.add(it) }) {}
+            .withFakeServer(sendConnectionAck = false) {
+                assertThat(events, hasItems(
+                        MessageSent(ConnectionInit(payload = null)),
+                        Closed(WsStatus(4408, "Connection initialisation timeout"))
+                    )
+                )
+            }
+    }
+
+    @Test
+    fun `when ping is received then a pong is sent`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(onEvent = { events.add(it) }){}.withFakeServer { server ->
+            server.awaitConnected()
+            server.send(Ping(payload = mapOf("some" to "value")))
+
+            assertThat(events, hasItems(
+                MessageSent(ConnectionInit(payload = null)),
+                MessageSent(Pong(payload = null)),
+                MessageReceived(ConnectionAck(payload = null)),
+                MessageReceived(Ping(payload = mapOf("some" to "value")))
+            ))
+        }
+    }
+
+    @Test
+    fun `when ping is received using a custom pingHandler then a pong is sent`() {
+        val events = LinkedBlockingQueue<GraphQLWsEvent>()
+        GraphQLWsClient(
+            pingHandler = { Pong(payload = mapOf("client" to "value") + it.payload.orEmpty()) },
+            onEvent = { events.add(it) }){
+        }.withFakeServer { server ->
+            server.awaitConnected()
+            server.send(Ping(payload = mapOf("server" to "value")))
+
+            assertThat(events, hasItems(
+                MessageSent(ConnectionInit(payload = null)),
+                MessageSent(Pong(payload = mapOf("client" to "value", "server" to "value"))),
+                MessageReceived(ConnectionAck(payload = null)),
+                MessageReceived(Ping(payload = mapOf("server" to "value")))
+            ))
+        }
     }
 
     @Test
@@ -194,17 +255,6 @@ class GraphQLWsClientTest {
     }
 
     @Test
-    fun `when socket is closed during connection a closed event is emitted`() {
-        val events = LinkedBlockingQueue<GraphQLWsEvent>()
-        GraphQLWsClient(onEvent = { events.add(it) }) {}.withFakeServer(allowConnection = false) {
-            assertThat(events, hasItems(
-                MessageSent(ConnectionInit(payload = null)),
-                Closed(WsStatus(4403, "Forbidden"))
-            ))
-        }
-    }
-
-    @Test
     fun `disconnecting from connection results in socket being closed with normal status and no more subscription messages`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
@@ -224,7 +274,7 @@ class GraphQLWsClientTest {
     }
 
     @Test
-    fun `connection_init and subscribe messages should be ignored but visible in events`() {
+    fun `connection_init and subscribe and pong messages should be ignored but visible in events`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
             connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(TestSubscriber())
@@ -233,16 +283,18 @@ class GraphQLWsClientTest {
             server.sendNext()
             server.send(ConnectionInit(payload = mapOf("some" to "value")))
             server.send(Subscribe("some_id", GraphQLRequest("some query")))
+            server.send(Pong(payload = mapOf("some" to "value")))
             server.sendComplete()
 
             assertThat(events, hasItems(
                 MessageSent(ConnectionInit(payload = null)),
-                MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
+                MessageReceived(ConnectionAck(payload = null)),
                 MessageReceived(Next("sub-1", "1")),
                 MessageReceived(Complete("sub-1")),
                 MessageReceived(ConnectionInit(payload = mapOf("some" to "value"))),
-                MessageReceived(Subscribe("some_id", GraphQLRequest("some query")))
+                MessageReceived(Subscribe("some_id", GraphQLRequest("some query"))),
+                MessageReceived(Pong(payload = mapOf("some" to "value")))
             ))
         }
     }
@@ -250,10 +302,11 @@ class GraphQLWsClientTest {
     companion object {
         private fun GraphQLWsClient.withFakeServer(
             allowConnection: Boolean = true,
+            sendConnectionAck: Boolean = true,
             subscriptionAlreadyExists: Boolean = false,
             block: (FakeServer) -> Unit
         ) = use {
-            val fakeServer = FakeServer(allowConnection, subscriptionAlreadyExists)
+            val fakeServer = FakeServer(allowConnection, sendConnectionAck, subscriptionAlreadyExists)
             this(fakeServer)
             block(fakeServer)
         }
@@ -271,6 +324,7 @@ class GraphQLWsClientTest {
 
 private class FakeServer(
     private val allowConnection: Boolean,
+    private val sendConnectionAck: Boolean,
     private val subscriptionAlreadyExists: Boolean
 ) : PushPullAdaptingWebSocket(Request(Method.GET, "graphql-ws")) {
 
@@ -294,8 +348,10 @@ private class FakeServer(
         when (val graphQLWsMessage = messageLens(message.body)) {
             is ConnectionInit -> {
                 if (allowConnection) {
-                    connected.countDown()
-                    triggerMessage(ConnectionAck(payload = null))
+                    if (sendConnectionAck) {
+                        connected.countDown()
+                        triggerMessage(ConnectionAck(payload = null))
+                    }
                 } else {
                     triggerClose(WsStatus(4403, "Forbidden"))
                 }
@@ -306,7 +362,11 @@ private class FakeServer(
                 }
             }
             is Complete -> {}
-            else -> fail("Unexpected message type '${graphQLWsMessage.type}'")
+            is Ping -> {}
+            is Pong -> {}
+            is ConnectionAck -> {}
+            is Error -> {}
+            is Next -> {}
         }
     }
 
