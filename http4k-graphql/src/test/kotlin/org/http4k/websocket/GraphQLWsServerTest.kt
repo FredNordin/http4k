@@ -43,6 +43,9 @@ import org.http4k.testing.ClosedWebsocket
 import org.http4k.testing.JsonApprovalTest
 import org.http4k.testing.TestWsClient
 import org.http4k.testing.testWsClient
+import org.http4k.websocket.GraphQLWsEvent.Closed
+import org.http4k.websocket.GraphQLWsEvent.MessageReceived
+import org.http4k.websocket.GraphQLWsEvent.MessageSent
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
@@ -344,13 +347,13 @@ class GraphQLWsServerTest {
 
             receivedMessages().take(4).toList()
 
-            val messageSentEvents = events.filterIsInstance<GraphQLWsEvent.MessageSent>()
+            val messageSentEvents = events.filterIsInstance<MessageSent>()
 
             assertThat(messageSentEvents, equalTo(listOf(
-                GraphQLWsEvent.MessageSent(ConnectionAck(payload = null)),
-                GraphQLWsEvent.MessageSent(Next("subscribe-1", 1)),
-                GraphQLWsEvent.MessageSent(Next("subscribe-1", 2)),
-                GraphQLWsEvent.MessageSent(Complete("subscribe-1"))
+                MessageSent(ConnectionAck(payload = null)),
+                MessageSent(Next("subscribe-1", 1)),
+                MessageSent(Next("subscribe-1", 2)),
+                MessageSent(Complete("subscribe-1"))
             )))
         }
     }
@@ -367,12 +370,12 @@ class GraphQLWsServerTest {
 
             receivedMessages().take(5).toList()
 
-            val messageSentEvents = events.filterIsInstance<GraphQLWsEvent.MessageReceived>()
+            val messageSentEvents = events.filterIsInstance<MessageReceived>()
 
             assertThat(messageSentEvents, equalTo(listOf(
-                GraphQLWsEvent.MessageReceived(ConnectionInit(payload = null)),
-                GraphQLWsEvent.MessageReceived(Ping(payload = null)),
-                GraphQLWsEvent.MessageReceived(Subscribe("subscribe-1", GraphQLRequest("test query")))
+                MessageReceived(ConnectionInit(payload = null)),
+                MessageReceived(Ping(payload = null)),
+                MessageReceived(Subscribe("subscribe-1", GraphQLRequest("test query")))
             )))
         }
     }
@@ -384,7 +387,7 @@ class GraphQLWsServerTest {
             close(WsStatus.GOING_AWAY)
 
             assertThat(events, allElements(
-                isA(has(GraphQLWsEvent.Closed::status, hasStatus(1001, "Going away")))
+                isA(has(Closed::status, hasStatus(1001, "Going away")))
             ))
         }
     }

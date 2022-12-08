@@ -13,8 +13,8 @@ import org.http4k.lens.GraphQLWsMessageLens
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
 import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import org.reactivestreams.Subscriber as ReactiveSubscriber
@@ -42,6 +42,8 @@ abstract class GraphQLWsProtocolHandler<S : GraphQLWsSession, NODE : Any>(
         }
 
         ws.onClose(session::close)
+
+        session.start()
     }
 
     protected abstract fun Websocket.createSession(executor: ScheduledExecutorService,
@@ -73,6 +75,8 @@ abstract class GraphQLWsSession(private val ws: Websocket, private val executor:
     }
 
     abstract fun handle(message: GraphQLWsMessage)
+
+    open fun start() {}
 
     val connected: Boolean get() = connectedState.get()
 
@@ -118,14 +122,14 @@ abstract class GraphQLWsSession(private val ws: Websocket, private val executor:
         onEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
     }
 
-    fun (() -> Unit).scheduleAfter(duration: Duration): ScheduledFuture<*> =
-        executor.schedule(this, duration.toMillis(), TimeUnit.MILLISECONDS).also { future ->
-            onCloseHandlers.add {
-                if (!future.isDone) {
-                    future.cancel(false)
-                }
+    fun FutureTask<*>.scheduleAfter(duration: Duration) {
+        executor.schedule(this, duration.toMillis(), TimeUnit.MILLISECONDS)
+        onCloseHandlers.add {
+            if (!this@scheduleAfter.isDone) {
+                this@scheduleAfter.cancel(false)
             }
         }
+    }
 }
 
 @Suppress("ReactiveStreamsSubscriberImplementation")

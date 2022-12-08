@@ -17,6 +17,7 @@ import org.http4k.lens.LensFailure
 import org.reactivestreams.Publisher
 import java.time.Duration
 import java.util.concurrent.CompletionStage
+import java.util.concurrent.FutureTask
 import java.util.concurrent.ScheduledExecutorService
 
 class GraphQLWsServer(
@@ -27,9 +28,11 @@ class GraphQLWsServer(
     private val subscribeHandler: Request.(Subscribe) -> CompletionStage<ExecutionResult>
 ) : GraphQLWsProtocolHandler<GraphQLWsServer.Session, JsonNode>(Jackson, onEvent), AutoCloseable {
 
-    override fun Websocket.createSession(executor: ScheduledExecutorService,
-                                         send: (GraphQLWsMessage) -> Unit,
-                                         onEvent: Request.(GraphQLWsEvent) -> Unit): Session =
+    override fun Websocket.createSession(
+        executor: ScheduledExecutorService,
+        send: (GraphQLWsMessage) -> Unit,
+        onEvent: Request.(GraphQLWsEvent) -> Unit
+    ): Session =
         Session(
             this,
             executor,
@@ -52,13 +55,17 @@ class GraphQLWsServer(
         executor: ScheduledExecutorService,
         send: (GraphQLWsMessage) -> Unit,
         onEvent: Request.(GraphQLWsEvent) -> Unit,
-        connectionInitWaitTimeout: Duration,
+        private val connectionInitWaitTimeout: Duration,
         private val connectHandler: Request.(ConnectionInit) -> ConnectionAck?,
         private val pingHandler: Request.(Ping) -> Pong,
         private val subscribeHandler: Request.(Subscribe) -> CompletionStage<ExecutionResult>
     ) : GraphQLWsSession(ws, executor, send, onEvent) {
 
-        private val connectionInitTimeoutCheck = { close(connectionInitTimeoutStatus) }.scheduleAfter(connectionInitWaitTimeout)
+        private val connectionInitTimeoutCheck = FutureTask { close(connectionInitTimeoutStatus) }
+
+        override fun start() {
+            connectionInitTimeoutCheck.scheduleAfter(connectionInitWaitTimeout)
+        }
 
         override fun handle(message: GraphQLWsMessage) {
             when (message) {
