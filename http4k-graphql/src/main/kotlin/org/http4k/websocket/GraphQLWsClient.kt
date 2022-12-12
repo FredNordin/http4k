@@ -52,7 +52,7 @@ open class GraphQLWsClient(
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
     override fun invoke(ws: Websocket) {
-        val connection = ClientConnection(ws, connectionAckWaitTimeout, connectionHandler, onConnected)
+        val connection = ClientConnection(ws)
 
         ws.onClose {
             connection.onClose(it)
@@ -60,26 +60,13 @@ open class GraphQLWsClient(
                 throw GraphQLWsClientException("Abnormal close of connection: $it")
             }
         }
-        ws.onError {
-            connection.close()
-        }
+        ws.onError { connection.close() }
 
         ws.onMessage { wsMessage ->
             try {
                 val message = graphqlWsMessageBody(wsMessage.body)
-
                 onEvent(ws.upgradeRequest, GraphQLWsEvent.MessageReceived(message))
-
-                when (message) {
-                    is ConnectionAck -> connection.onConnected()
-                    is Next -> connection.handleNext(message)
-                    is Complete -> connection.handleComplete(message)
-                    is Error -> connection.handleError(message)
-                    is Ping -> ws.send(pingHandler(message))
-                    is Pong -> {}
-                    is ConnectionInit -> {}
-                    is Subscribe -> {}
-                }
+                connection.handle(message)
             } catch (error: Exception) {
                 connection.close()
                 throw when (error) {
@@ -102,12 +89,7 @@ open class GraphQLWsClient(
         onEvent(upgradeRequest, GraphQLWsEvent.MessageSent(message))
     }
 
-    private inner class ClientConnection(
-        private val ws: Websocket,
-        private val connectionAckWaitTimeout: Duration,
-        private val connectionHandler: Request.() -> ConnectionInit,
-        private val onConnected: (GraphQLWsConnection) -> Unit
-    ) : GraphQLWsConnection {
+    private inner class ClientConnection(private val ws: Websocket) : GraphQLWsConnection {
 
         private val subscriptions = ConcurrentHashMap<String, SubscriptionPublisher>()
         private val cleanUpTasks = mutableListOf({
@@ -131,6 +113,27 @@ open class GraphQLWsClient(
             }
         }
 
+        fun handle(message: GraphQLWsMessage) {
+            when (message) {
+                is ConnectionAck -> {
+                    connectionAckTimeoutCheck.cancel(false)
+                    onConnected(this)
+                }
+
+                is Next -> subscriptions[message.id]?.offer(message.payload)
+
+                is Complete -> subscriptions[message.id]?.noMoreData()
+
+                is Error -> subscriptions[message.id]?.offerError(GraphQLException(message.payload.toString())) // TODO Better error
+
+                is Ping -> ws.send(pingHandler(message))
+
+                is Pong -> {}
+                is ConnectionInit -> {}
+                is Subscribe -> {}
+            }
+        }
+
         override fun subscribe(request: GraphQLRequest, id: String): Publisher<Any> {
             val publisher = SubscriptionPublisher(id, request)
             if (subscriptions.putIfAbsent(id, publisher) == null) {
@@ -142,23 +145,6 @@ open class GraphQLWsClient(
 
         override fun disconnect() {
             ws.close(WsStatus.NORMAL)
-        }
-
-        fun onConnected() {
-            connectionAckTimeoutCheck.cancel(false)
-            onConnected(this)
-        }
-
-        fun handleNext(message: Next) {
-            subscriptions[message.id]?.offer(message.payload)
-        }
-
-        fun handleComplete(message: Complete) {
-            subscriptions[message.id]?.noMoreData()
-        }
-
-        fun handleError(message: Error) {
-            subscriptions[message.id]?.offerError(GraphQLException(message.payload.toString())) // TODO Better exception
         }
 
         fun onClose(status: WsStatus) {
