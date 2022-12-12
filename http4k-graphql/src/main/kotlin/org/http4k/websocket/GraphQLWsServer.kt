@@ -5,6 +5,7 @@ import graphql.ExecutionResult
 import graphql.GraphQLError
 import graphql.GraphqlErrorException
 import graphql.execution.reactive.CompletionStageMappingPublisher
+import graphql.execution.reactive.SingleSubscriberPublisher
 import org.http4k.core.Body
 import org.http4k.core.Request
 import org.http4k.format.AutoMarshallingJson
@@ -57,7 +58,7 @@ class GraphQLWsServer(
                 val message = graphqlWsMessageBody(wsMessage.body)
                 onEvent(ws.upgradeRequest, GraphQLWsEvent.MessageReceived(message))
                 connection.handle(message)
-            } catch(error: Exception) {
+            } catch (error: Exception) {
                 ws.close(
                     when (error) {
                         is LensFailure -> badRequestStatus(error)
@@ -103,6 +104,15 @@ class GraphQLWsServer(
             }
         }
 
+        fun onClose(status: WsStatus) {
+            close()
+            onEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
+        }
+
+        fun close() {
+            cleanUpTasks.forEach { it() }
+        }
+
         fun handle(message: GraphQLWsMessage) {
             when (message) {
                 is ConnectionInit -> {
@@ -129,26 +139,13 @@ class GraphQLWsServer(
                                 if (exception != null) {
                                     sendError(id, exception)
                                 } else {
-                                    if (result.isDataPresent) {
+                                    val publisher: Publisher<ExecutionResult> =
                                         when (val data = result.getData<Any?>()) {
-                                            is Publisher<*> -> {
-                                                CompletionStageMappingPublisher(data) {
-                                                    val resultFuture = CompletableFuture<ExecutionResult>()
-                                                    runCatching { it as ExecutionResult }.fold(
-                                                        resultFuture::complete,
-                                                        resultFuture::completeExceptionally
-                                                    )
-                                                    resultFuture
-                                                }.subscribe(subscriber)
-                                            }
-                                            else -> {
-                                                sendNext(id, data)
-                                                sendComplete(id)
-                                            }
+                                            is Publisher<*> -> data.asResultPublisher()
+                                            else -> result.asSingleResultPublisher()
                                         }
-                                    } else {
-                                        sendError(id, result.errors)
-                                    }
+
+                                    publisher.subscribe(subscriber)
                                 }
                             }
                         }
@@ -175,33 +172,40 @@ class GraphQLWsServer(
             }
         }
 
-        fun sendNext(id: String, payload: Any?) {
+        private fun Publisher<*>.asResultPublisher(): Publisher<ExecutionResult> =
+            CompletionStageMappingPublisher(this) {
+                val resultFuture = CompletableFuture<ExecutionResult>()
+                runCatching { it as ExecutionResult }.fold(
+                    resultFuture::complete,
+                    resultFuture::completeExceptionally
+                )
+                resultFuture
+            }
+
+        private fun ExecutionResult.asSingleResultPublisher(): Publisher<ExecutionResult> =
+            SingleSubscriberPublisher<ExecutionResult>().apply {
+                offer(this@asSingleResultPublisher)
+                noMoreData()
+            }
+
+        private fun sendNext(id: String, payload: Any?) {
             val next = Next(id, payload)
             ws.send(next)
         }
 
-        fun sendComplete(id: String) {
+        private fun sendComplete(id: String) {
             subscriptions.remove(id)
             val complete = Complete(id)
             ws.send(complete)
         }
 
-        fun sendError(id: String, exception: Throwable) =
+        private fun sendError(id: String, exception: Throwable) =
             sendError(id, listOf(exception.toGraphQLError()))
 
-        fun sendError(id: String, errors: List<GraphQLError>) {
+        private fun sendError(id: String, errors: List<GraphQLError>) {
             subscriptions.remove(id)
             val error = Error(id, errors.map { it.toSpecification() })
             ws.send(error)
-        }
-
-        fun onClose(status: WsStatus) {
-            close()
-            onEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
-        }
-
-        fun close() {
-            cleanUpTasks.forEach { it() }
         }
 
         @Suppress("ReactiveStreamsSubscriberImplementation")
