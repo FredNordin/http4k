@@ -2,6 +2,7 @@ package org.http4k.websocket
 
 import com.fasterxml.jackson.databind.JsonNode
 import graphql.ExecutionResult
+import graphql.execution.reactive.CompletionStageMappingPublisher
 import org.http4k.core.Request
 import org.http4k.format.Jackson
 import org.http4k.graphql.ws.GraphQLWsMessage
@@ -16,6 +17,7 @@ import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
 import org.http4k.lens.LensFailure
 import org.reactivestreams.Publisher
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.FutureTask
 import java.util.concurrent.ScheduledExecutorService
@@ -96,7 +98,12 @@ class GraphQLWsServer(
                                     if (result.isDataPresent) {
                                         when (val data = result.getData<Any?>()) {
                                             is Publisher<*> -> {
-                                                data.subscribe(subscriber)
+                                                CompletionStageMappingPublisher(data) {
+                                                    val resultFuture = CompletableFuture<ExecutionResult>()
+                                                    runCatching { it as ExecutionResult }
+                                                        .fold(resultFuture::complete, resultFuture::completeExceptionally)
+                                                    resultFuture
+                                                }.subscribe(subscriber)
                                             }
                                             else -> {
                                                 sendNext(id, data)

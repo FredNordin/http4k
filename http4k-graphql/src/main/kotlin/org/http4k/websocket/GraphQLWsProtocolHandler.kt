@@ -1,5 +1,6 @@
 package org.http4k.websocket
 
+import graphql.ExecutionResult
 import graphql.GraphQLError
 import graphql.GraphqlErrorException
 import org.http4k.core.Body
@@ -133,7 +134,7 @@ abstract class GraphQLWsSession(private val ws: Websocket, private val executor:
 }
 
 @Suppress("ReactiveStreamsSubscriberImplementation")
-class Subscription(private val id: String, private val session: GraphQLWsSession) : ReactiveSubscriber<Any?> {
+class Subscription(private val id: String, private val session: GraphQLWsSession) : ReactiveSubscriber<ExecutionResult> {
     private var subscription: ReactiveSubscription? = null
 
     override fun onSubscribe(sub: ReactiveSubscription) {
@@ -141,14 +142,22 @@ class Subscription(private val id: String, private val session: GraphQLWsSession
         subscription?.request(1)
     }
 
-    override fun onNext(next: Any?) = doSafely {
-        session.sendNext(id, next)
-        subscription?.request(1)
+    override fun onNext(next: ExecutionResult) = doSafely {
+        if (next.isDataPresent) {
+            session.sendNext(id, next.getData())
+            subscription?.request(1)
+        } else {
+            sendError(next.errors)
+        }
     }
 
-    override fun onError(error: Throwable) = doSafely {
+    override fun onError(error: Throwable) {
+        sendError(listOf(error.toGraphQLError()))
+    }
+
+    private fun sendError(errors: List<GraphQLError>) = doSafely {
         subscription?.cancel()
-        session.sendError(id, listOf(error.toGraphQLError()))
+        session.sendError(id, errors)
     }
 
     override fun onComplete() = doSafely {

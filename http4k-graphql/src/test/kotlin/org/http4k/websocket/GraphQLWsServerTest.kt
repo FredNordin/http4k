@@ -104,7 +104,7 @@ class GraphQLWsServerTest {
     @Test
     fun `on subscribe one next message is sent per result and one complete is sent when done`(approver: Approver) {
         GraphQLWsServer {
-            completedFuture(FakeExecutionResult(data = listOf(1, 2, 3).asFlow().asPublisher()))
+            streamResultOf(1, 2, 3)
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
@@ -116,8 +116,7 @@ class GraphQLWsServerTest {
     @Test
     fun `on subscribe with existing id the socket is closed`() {
         GraphQLWsServer {
-            val data = listOf(1).asFlow().onEach { delay(1000) }.asPublisher()
-            completedFuture(FakeExecutionResult(data))
+            streamResultOf(1) { delay(1000) }
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
@@ -141,7 +140,7 @@ class GraphQLWsServerTest {
     @Test
     fun `on subscribe with id of previously completed subscription is allowed`(approver: Approver) {
         GraphQLWsServer {
-            completedFuture(FakeExecutionResult(listOf(1).asFlow().asPublisher()))
+            streamResultOf(1)
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
@@ -216,8 +215,9 @@ class GraphQLWsServerTest {
     @Test
     fun `on subscribe an error message is sent and no more messages when subscription result contains error`(approver: Approver) {
         GraphQLWsServer {
-            val data = listOf({ 1 }, { throw IllegalStateException("Boom!") }, { 2 }).asFlow().map { it() }.asPublisher()
-            completedFuture(FakeExecutionResult(data = data))
+            streamResultOf(1, 2, 3) { if (it == 2) throw IllegalStateException("Boom!") }
+//            val data = listOf({ 1 }, { throw IllegalStateException("Boom!") }, { 2 }).asFlow().map { it() }.asPublisher()
+//            completedFuture(FakeExecutionResult(data = data))
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
@@ -229,7 +229,7 @@ class GraphQLWsServerTest {
     @Test
     fun `on subscribe for multiple subscriptions results in messages for all subscriptions`(approver: Approver) {
         GraphQLWsServer {
-            completedFuture(FakeExecutionResult(data = listOf(1, 2, 3).asFlow().asPublisher()))
+            streamResultOf(1, 2, 3)
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
@@ -278,8 +278,7 @@ class GraphQLWsServerTest {
     @Test
     fun `on complete stops sending messages for active subscription`(approver: Approver) {
         GraphQLWsServer {
-            val data = listOf(1, 2, 3).asFlow().onEach { if (it > 1) delay(40) }.asPublisher()
-            completedFuture(FakeExecutionResult(data))
+            streamResultOf(1, 2, 3) { if (it > 1) delay(40) }
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
@@ -297,8 +296,7 @@ class GraphQLWsServerTest {
     @Test
     fun `on complete does nothing when the id does not match any subscriptions`(approver: Approver) {
         GraphQLWsServer {
-            val data = listOf(1, 2, 3).asFlow().onEach { if (it > 1) delay(10) }.asPublisher()
-            completedFuture(FakeExecutionResult(data))
+            streamResultOf(1, 2, 3) { if (it > 1) delay(10) }
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
@@ -340,7 +338,7 @@ class GraphQLWsServerTest {
     fun `onEvent is called when each message is sent`(approver: Approver) {
         val events = mutableListOf<GraphQLWsEvent>()
         GraphQLWsServer(onEvent = { events += it }) {
-            completedFuture(FakeExecutionResult(data = listOf(1, 2).asFlow().asPublisher()))
+            streamResultOf(1, 2)
         }.withTestClient {
             sendConnectionInit()
             sendSubscribe("subscribe-1")
@@ -362,7 +360,7 @@ class GraphQLWsServerTest {
     fun `onEvent is called when each message is received`(approver: Approver) {
         val events = mutableListOf<GraphQLWsEvent>()
         GraphQLWsServer(onEvent = { events += it }) {
-            completedFuture(FakeExecutionResult(data = listOf(1, 2).asFlow().asPublisher()))
+            streamResultOf(1, 2)
         }.withTestClient {
             sendConnectionInit()
             send { obj("type" to string("ping")) }
@@ -418,7 +416,7 @@ class GraphQLWsServerTest {
         )
 
         private val emptyResult: Request.(Subscribe) -> CompletableFuture<ExecutionResult> = {
-            completedFuture(FakeExecutionResult(data = emptyFlow<Int>().asPublisher()))
+            completedFuture(FakeExecutionResult(data = emptyFlow<ExecutionResult>().asPublisher()))
         }
 
         private fun closedWebsocketWithStatus(code: Int, description: String): Matcher<ClosedWebsocket> =
@@ -432,6 +430,11 @@ class GraphQLWsServerTest {
                 block(websockets(it).testWsClient(Request(Method.GET, ""), receiveTimeout = Duration.ofMillis(50)))
             }
         }
+
+        private fun streamResultOf(vararg values: Int, onEach: suspend (Int) -> Unit = {}): CompletableFuture<ExecutionResult> =
+            completedFuture(FakeExecutionResult(
+                values.asFlow().onEach(onEach).map { FakeExecutionResult(it)}.asPublisher()
+            ))
     }
 }
 

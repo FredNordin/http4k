@@ -1,5 +1,6 @@
 package org.http4k.websocket
 
+import com.natpryce.hamkrest.allOf
 import com.natpryce.hamkrest.and
 import com.natpryce.hamkrest.anyElement
 import com.natpryce.hamkrest.assertion.assertThat
@@ -9,6 +10,7 @@ import com.natpryce.hamkrest.hasElement
 import com.natpryce.hamkrest.hasSize
 import com.natpryce.hamkrest.isA
 import com.natpryce.hamkrest.present
+import com.natpryce.hamkrest.throws
 import graphql.GraphQLException
 import org.http4k.core.Body
 import org.http4k.core.Method
@@ -26,6 +28,7 @@ import org.http4k.graphql.ws.GraphQLWsMessage.Ping
 import org.http4k.graphql.ws.GraphQLWsMessage.Pong
 import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
 import org.http4k.lens.GraphQLWsMessageLens
+import org.http4k.lens.LensFailure
 import org.http4k.websocket.GraphQLWsEvent.Closed
 import org.http4k.websocket.GraphQLWsEvent.MessageReceived
 import org.http4k.websocket.GraphQLWsEvent.MessageSent
@@ -72,14 +75,17 @@ class GraphQLWsClientTest {
     }
 
     @Test
-    fun `when socket is closed during connection a closed event is emitted`() {
+    fun `throws exception when socket is closed during connection by server`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
-        GraphQLWsClient(onEvent = { events.add(it) }) {}.withFakeServer(allowConnection = false) {
-            events.mustHaveItems(
-                MessageSent(ConnectionInit(payload = null)),
-                Closed(WsStatus(4403, "Forbidden"))
+        assertThat(
+            { GraphQLWsClient(onEvent = { events.add(it) }) {}.withFakeServer(allowConnection = false) {} },
+            throws(
+                has(GraphQLWsClientException::message, equalTo("Abnormal close of connection: 4403 Forbidden"))
             )
-        }
+        )
+        events.mustHaveItems(
+            Closed(WsStatus(4403, "Forbidden"))
+        )
     }
 
     @Test
@@ -134,7 +140,7 @@ class GraphQLWsClientTest {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         val subscriber = TestSubscriber()
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
-            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(subscriber)
+            connection.subscribe(GraphQLRequest("some subscription"), "sub-1").subscribe(subscriber)
         }.withFakeServer { server ->
             server.awaitConnected()
             server.sendNext()
@@ -161,7 +167,7 @@ class GraphQLWsClientTest {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         val subscriber = TestSubscriber()
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
-            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(subscriber)
+            connection.subscribe(GraphQLRequest("some subscription"), "sub-1").subscribe(subscriber)
         }.withFakeServer { server ->
             server.awaitConnected()
             server.sendNext()
@@ -186,7 +192,7 @@ class GraphQLWsClientTest {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         val subscriber = TestSubscriber()
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
-            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(subscriber)
+            connection.subscribe(GraphQLRequest("some subscription"), "sub-1").subscribe(subscriber)
         }.withFakeServer { server ->
             server.awaitConnected()
             server.sendNext()
@@ -218,7 +224,7 @@ class GraphQLWsClientTest {
         var error: Throwable? = null
         val subscriber = TestSubscriber { error = it }
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
-            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(subscriber)
+            connection.subscribe(GraphQLRequest("some subscription"), "sub-1").subscribe(subscriber)
         }.withFakeServer { server ->
             server.awaitConnected()
             server.sendError()
@@ -235,45 +241,32 @@ class GraphQLWsClientTest {
     }
 
     @Test
-    fun `subscription with existing id results in socket being closed`() {
+    fun `throws exception when creating subscription with existing id`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
-            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(TestSubscriber())
-            connection.newSubscription("sub-1", GraphQLRequest("another subscription")).subscribe(TestSubscriber())
+            connection.subscribe(GraphQLRequest("some subscription"), "sub-1").subscribe(TestSubscriber())
+
+            assertThat(
+                { connection.subscribe(GraphQLRequest("another subscription"), "sub-1").subscribe(TestSubscriber()) },
+                throws(
+                    has(GraphQLWsClientException::message, equalTo("Subscriber for 'sub-1' already exists"))
+                )
+            )
         }.withFakeServer { server ->
             server.awaitConnected()
-
-            events.mustHaveItems(
-                MessageSent(ConnectionInit(payload = null)),
-                MessageReceived(ConnectionAck(payload = null)),
-                MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
-                Closed(WsStatus(4409, "Subscriber for 'sub-1' already exists"))
-            )
         }
-    }
-
-    @Test
-    fun `subscription with id existing on server results in socket being closed`() {
-        val events = LinkedBlockingQueue<GraphQLWsEvent>()
-        GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
-            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(TestSubscriber())
-        }.withFakeServer(subscriptionAlreadyExists = true) { server ->
-            server.awaitConnected()
-
-            events.mustHaveItems(
-                MessageSent(ConnectionInit(payload = null)),
-                MessageReceived(ConnectionAck(payload = null)),
-                MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
-                Closed(WsStatus(4409, "Subscriber for 'sub-1' already exists"))
-            )
-        }
+        events.mustHaveItems(
+            MessageSent(ConnectionInit(payload = null)),
+            MessageReceived(ConnectionAck(payload = null)),
+            MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription")))
+        )
     }
 
     @Test
     fun `disconnecting from connection results in socket being closed with normal status and no more subscription messages`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
-            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(TestSubscriber())
+            connection.subscribe(GraphQLRequest("some subscription"), "sub-1").subscribe(TestSubscriber())
             connection.disconnect()
         }.withFakeServer { server ->
             server.awaitConnected()
@@ -292,7 +285,7 @@ class GraphQLWsClientTest {
     fun `connection_init and subscribe and pong messages should be ignored but visible in events`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(onEvent = { events.add(it) }) { connection ->
-            connection.newSubscription("sub-1", GraphQLRequest("some subscription")).subscribe(TestSubscriber())
+            connection.subscribe(GraphQLRequest("some subscription"), "sub-1").subscribe(TestSubscriber())
         }.withFakeServer { server ->
             server.awaitConnected()
             server.sendNext()
@@ -315,18 +308,21 @@ class GraphQLWsClientTest {
     }
 
     @Test
-    fun `on invalid message returned from server the socket is closed`() {
+    fun `throws exception on invalid message returned from server`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(onEvent = { events.add(it) }) {}.withFakeServer { server ->
             server.awaitConnected()
-            server.sendInvalidMessage()
-
-            events.mustHaveItems(
-                MessageSent(ConnectionInit(payload = null)),
-                MessageReceived(ConnectionAck(payload = null)),
-                Closed(WsStatus(4400, "graphql-ws message field 'type' is required"))
-            )
+            assertThat({ server.sendInvalidMessage() }, throws(allOf(
+                has(GraphQLWsClientException::message, equalTo("Invalid graphql-ws message received")),
+                has(GraphQLWsClientException::cause,
+                    present(isA(has(LensFailure::message, equalTo("graphql-ws message field 'type' is required"))))
+                )
+            )))
         }
+        events.mustHaveItems(
+            MessageSent(ConnectionInit(payload = null)),
+            MessageReceived(ConnectionAck(payload = null))
+        )
     }
 
     companion object {
