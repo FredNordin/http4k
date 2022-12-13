@@ -12,6 +12,7 @@ import com.natpryce.hamkrest.isA
 import com.natpryce.hamkrest.present
 import com.natpryce.hamkrest.throws
 import graphql.GraphQLException
+import graphql.GraphqlErrorBuilder
 import org.http4k.core.Body
 import org.http4k.core.Method
 import org.http4k.core.Request
@@ -229,13 +230,22 @@ class GraphQLWsClientTest {
             server.awaitConnected()
             server.sendError()
 
-            assertThat(error, present(isA(has(GraphQLException::message, equalTo("[{message=boom}]")))))
+            assertThat(error, present(isA(allOf(
+                has(GraphQLWsClientException::message, equalTo("Operation execution error for subscription 'sub-1'")),
+                has(GraphQLWsClientException::cause,
+                    present(isA(has(GraphQLException::message, equalTo("[{message=boom, locations=[], extensions={classification=DataFetchingException}}]"))))
+                )
+            ))))
 
             events.mustHaveItems(
                 MessageSent(ConnectionInit(payload = null)),
                 MessageReceived(ConnectionAck(payload = null)),
                 MessageSent(Subscribe("sub-1", GraphQLRequest("some subscription"))),
-                MessageReceived(Error("sub-1", listOf(mapOf("message" to "boom"))))
+                MessageReceived(Error("sub-1", listOf(mapOf(
+                    "message" to "boom",
+                    "locations" to emptyList<Any>(),
+                    "extensions" to mapOf("classification" to "DataFetchingException")
+                ))))
             )
         }
     }
@@ -372,7 +382,12 @@ private class FakeServer(
         send(Complete(subId))
 
     fun sendError(subId: String = "sub-1") =
-        send(Error(subId, listOf(mapOf("message" to "boom"))))
+        send(Error(subId, listOf(
+            GraphqlErrorBuilder.newError()
+                .message("boom")
+                .build()
+                .toSpecification()
+        )))
 
     fun send(message: GraphQLWsMessage) = triggerMessage(message)
 

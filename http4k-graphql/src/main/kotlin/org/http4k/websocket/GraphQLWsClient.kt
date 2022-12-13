@@ -124,7 +124,12 @@ open class GraphQLWsClient(
 
                 is Complete -> subscriptions[message.id]?.noMoreData()
 
-                is Error -> subscriptions[message.id]?.offerError(GraphQLException(message.payload.toString())) // TODO Better error
+                is Error -> subscriptions[message.id]?.offerError(
+                    GraphQLWsClientException(
+                        "Operation execution error for subscription '${message.id}'",
+                        GraphQLException(message.payload.toString())
+                    )
+                )
 
                 is Ping -> ws.send(pingHandler(message))
 
