@@ -39,14 +39,13 @@ interface GraphQLWsConnection {
 class GraphQLWsClientException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 open class GraphQLWsClient(
+    json: AutoMarshallingJson<JsonNode> = Jackson,
     private val connectionAckWaitTimeout: Duration = Duration.ofSeconds(3),
     private val connectionInitProvider: Request.() -> ConnectionInit = { ConnectionInit(payload = null) },
     private val pingHandler: (Ping) -> Pong = { Pong(payload = null) },
     private val onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val onConnected: (GraphQLWsConnection) -> Unit
 ) : WsConsumer, AutoCloseable {
-
-    private val json: AutoMarshallingJson<JsonNode> = Jackson
 
     private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()

@@ -35,14 +35,13 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class GraphQLWsServer(
+    json: AutoMarshallingJson<JsonNode> = Jackson,
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3),
     private val connectionHandler: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val pingHandler: Request.(Ping) -> Pong = { Pong(payload = null) },
     private val onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val subscribeHandler: Request.(Subscribe) -> CompletionStage<ExecutionResult>
 ) : WsConsumer, AutoCloseable {
-
-    private val json: AutoMarshallingJson<JsonNode> = Jackson
 
     private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
