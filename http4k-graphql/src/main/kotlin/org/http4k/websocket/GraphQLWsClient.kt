@@ -40,7 +40,7 @@ class GraphQLWsClientException(message: String, cause: Throwable? = null) : Runt
 
 open class GraphQLWsClient(
     private val connectionAckWaitTimeout: Duration = Duration.ofSeconds(3),
-    private val connectionHandler: Request.() -> ConnectionInit = { ConnectionInit(payload = null) },
+    private val connectionInitProvider: Request.() -> ConnectionInit = { ConnectionInit(payload = null) },
     private val pingHandler: (Ping) -> Pong = { Pong(payload = null) },
     private val onEvent: Request.(GraphQLWsEvent) -> Unit = {},
     private val onConnected: (GraphQLWsConnection) -> Unit
@@ -103,7 +103,7 @@ open class GraphQLWsClient(
         }
 
         fun start() {
-            ws.send(connectionHandler(ws.upgradeRequest))
+            ws.send(connectionInitProvider(ws.upgradeRequest))
 
             executor.schedule(connectionAckTimeoutCheck, connectionAckWaitTimeout.toMillis(), TimeUnit.MILLISECONDS)
             cleanUpTasks.add {

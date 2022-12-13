@@ -60,10 +60,10 @@ class GraphQLWsClientTest {
     }
 
     @Test
-    fun `sends connection_init with result of custom connectionHandler on ws connect`() {
+    fun `sends connection_init with result of custom provider on ws connect`() {
         val events = LinkedBlockingQueue<GraphQLWsEvent>()
         GraphQLWsClient(
-            connectionHandler = { ConnectionInit(payload = mapOf("method" to method, "uri" to uri)) },
+            connectionInitProvider = { ConnectionInit(payload = mapOf("method" to method, "uri" to uri)) },
             onEvent = { events.add(it) }){
         }.withFakeServer { server ->
             server.awaitConnected()
