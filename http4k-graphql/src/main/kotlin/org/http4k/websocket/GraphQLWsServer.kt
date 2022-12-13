@@ -10,6 +10,8 @@ import org.http4k.core.Body
 import org.http4k.core.Request
 import org.http4k.format.AutoMarshallingJson
 import org.http4k.format.Jackson
+import org.http4k.graphql.ws.GraphQLWsEvent
+import org.http4k.graphql.ws.GraphQLWsEventHandler
 import org.http4k.graphql.ws.GraphQLWsMessage
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
@@ -39,7 +41,7 @@ class GraphQLWsServer(
     private val connectionInitWaitTimeout: Duration = Duration.ofSeconds(3),
     private val connectionHandler: Request.(ConnectionInit) -> ConnectionAck? = { ConnectionAck(payload = null) },
     private val pingHandler: Request.(Ping) -> Pong = { Pong(payload = null) },
-    private val onEvent: Request.(GraphQLWsEvent) -> Unit = {},
+    private val onEvent: GraphQLWsEventHandler = {},
     private val subscribeHandler: Request.(Subscribe) -> CompletionStage<ExecutionResult>
 ) : WsConsumer, AutoCloseable {
 

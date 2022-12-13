@@ -9,6 +9,8 @@ import org.http4k.core.Request
 import org.http4k.format.AutoMarshallingJson
 import org.http4k.format.Jackson
 import org.http4k.graphql.GraphQLRequest
+import org.http4k.graphql.ws.GraphQLWsEvent
+import org.http4k.graphql.ws.GraphQLWsEventHandler
 import org.http4k.graphql.ws.GraphQLWsMessage
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
@@ -43,7 +45,7 @@ open class GraphQLWsClient(
     private val connectionAckWaitTimeout: Duration = Duration.ofSeconds(3),
     private val connectionInitProvider: Request.() -> ConnectionInit = { ConnectionInit(payload = null) },
     private val pingHandler: (Ping) -> Pong = { Pong(payload = null) },
-    private val onEvent: Request.(GraphQLWsEvent) -> Unit = {},
+    private val onEvent: GraphQLWsEventHandler = {},
     private val onConnected: (GraphQLWsConnection) -> Unit
 ) : WsConsumer, AutoCloseable {
 

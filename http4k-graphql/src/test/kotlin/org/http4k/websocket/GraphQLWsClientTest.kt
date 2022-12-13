@@ -19,6 +19,10 @@ import org.http4k.core.Request
 import org.http4k.core.Uri
 import org.http4k.format.Jackson
 import org.http4k.graphql.GraphQLRequest
+import org.http4k.graphql.ws.GraphQLWsEvent
+import org.http4k.graphql.ws.GraphQLWsEvent.Closed
+import org.http4k.graphql.ws.GraphQLWsEvent.MessageReceived
+import org.http4k.graphql.ws.GraphQLWsEvent.MessageSent
 import org.http4k.graphql.ws.GraphQLWsMessage
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
@@ -30,9 +34,6 @@ import org.http4k.graphql.ws.GraphQLWsMessage.Pong
 import org.http4k.graphql.ws.GraphQLWsMessage.Subscribe
 import org.http4k.lens.GraphQLWsMessageLens
 import org.http4k.lens.LensFailure
-import org.http4k.websocket.GraphQLWsEvent.Closed
-import org.http4k.websocket.GraphQLWsEvent.MessageReceived
-import org.http4k.websocket.GraphQLWsEvent.MessageSent
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.reactivestreams.Subscriber

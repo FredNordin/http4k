@@ -29,6 +29,10 @@ import org.http4k.core.Status
 import org.http4k.core.with
 import org.http4k.format.Jackson
 import org.http4k.graphql.GraphQLRequest
+import org.http4k.graphql.ws.GraphQLWsEvent
+import org.http4k.graphql.ws.GraphQLWsEvent.Closed
+import org.http4k.graphql.ws.GraphQLWsEvent.MessageReceived
+import org.http4k.graphql.ws.GraphQLWsEvent.MessageSent
 import org.http4k.graphql.ws.GraphQLWsMessage.Complete
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionAck
 import org.http4k.graphql.ws.GraphQLWsMessage.ConnectionInit
@@ -43,9 +47,6 @@ import org.http4k.testing.ClosedWebsocket
 import org.http4k.testing.JsonApprovalTest
 import org.http4k.testing.TestWsClient
 import org.http4k.testing.testWsClient
-import org.http4k.websocket.GraphQLWsEvent.Closed
-import org.http4k.websocket.GraphQLWsEvent.MessageReceived
-import org.http4k.websocket.GraphQLWsEvent.MessageSent
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ExtendWith
