@@ -40,17 +40,21 @@ interface GraphQLWsConnection {
 
 class GraphQLWsClientException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
-open class GraphQLWsClient(
+class GraphQLWsClient(
     json: AutoMarshallingJson<JsonNode> = Jackson,
     private val connectionAckWaitTimeout: Duration = Duration.ofSeconds(3),
     private val connectionInitProvider: Request.() -> ConnectionInit = { ConnectionInit(payload = null) },
     private val pingHandler: (Ping) -> Pong = { Pong(payload = null) },
-    private val onEvent: GraphQLWsEventHandler = {},
     private val onConnected: (GraphQLWsConnection) -> Unit
 ) : WsConsumer, AutoCloseable {
 
     private val graphqlWsMessageBody = GraphQLWsMessageLens(json)
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
+    private val onEventHandlers = mutableListOf<GraphQLWsEventHandler>()
+
+    fun onEvent(handler: GraphQLWsEventHandler) {
+        onEventHandlers.add(handler)
+    }
 
     override fun invoke(ws: Websocket) {
         val connection = ClientConnection(ws)
@@ -66,7 +70,7 @@ open class GraphQLWsClient(
         ws.onMessage { wsMessage ->
             try {
                 val message = graphqlWsMessageBody(wsMessage.body)
-                onEvent(ws.upgradeRequest, GraphQLWsEvent.MessageReceived(message))
+                triggerEvent(ws.upgradeRequest, GraphQLWsEvent.MessageReceived(message))
                 connection.handle(message)
             } catch (error: Exception) {
                 connection.close()
@@ -85,9 +89,13 @@ open class GraphQLWsClient(
         executor.shutdown()
     }
 
+    private fun triggerEvent(request: Request, event: GraphQLWsEvent) {
+        onEventHandlers.forEach { it(request, event) }
+    }
+
     private fun Websocket.send(message: GraphQLWsMessage) {
         send(WsMessage(graphqlWsMessageBody(message, Body.EMPTY)))
-        onEvent(upgradeRequest, GraphQLWsEvent.MessageSent(message))
+        triggerEvent(upgradeRequest, GraphQLWsEvent.MessageSent(message))
     }
 
     private inner class ClientConnection(private val ws: Websocket) : GraphQLWsConnection {
@@ -155,7 +163,7 @@ open class GraphQLWsClient(
 
         fun onClose(status: WsStatus) {
             close()
-            onEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
+            triggerEvent(ws.upgradeRequest, GraphQLWsEvent.Closed(status))
         }
 
         fun close() {
